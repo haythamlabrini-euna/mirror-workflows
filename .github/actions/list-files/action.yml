@@ -1,0 +1,11 @@
+name: 'List Files in .github'
+description: 'Lists all files recursively within the .github directory'
+runs:
+  using: 'composite'
+  steps:
+    - name: List files
+      shell: bash
+      run: |
+        echo "Listing files in .github directory:"
+        find .github -type f | sort
+

@@ -1,0 +1,18 @@
+{
+  "name": "mirror-workflows",
+  "version": "1.0.0",
+  "description": "Reusable GitHub Actions and workflows for mirroring repositories to Bitbucket",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:mirror && npm run build:wait",
+    "build:mirror": "esbuild .github/actions/mirror-to-bitbucket/mirror.ts --bundle --platform=node --target=node20 --outfile=.github/actions/mirror-to-bitbucket/dist/index.js",
+    "build:wait": "esbuild .github/actions/wait-for-bitbucket-pipeline/wait.ts --bundle --platform=node --target=node20 --outfile=.github/actions/wait-for-bitbucket-pipeline/dist/index.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.0.0"
+  }
+}
+

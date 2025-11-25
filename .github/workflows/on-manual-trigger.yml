@@ -1,0 +1,40 @@
+name: On Manual Trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+# One deployment per environment at a time
+concurrency:
+  group: manual-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_ENV: ${{ inputs.environment }}
+    steps:
+      - name: Deployment job summary
+        run: |
+          echo "🚀 Manual Trigger Deployment - Echo Only Mode"
+          echo "User: ${{ github.actor }} | Environment: ${TARGET_ENV}"
+          echo "Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "Timestamp (UTC): $(date -u +"%Y-%m-%d %H:%M:%S")"
+          if [ "${TARGET_ENV}" = "production" ]; then
+            echo "⚠️  Production deployment requested (simulated)"
+          else
+            echo "ℹ️  Non-production deployment (${TARGET_ENV}) (simulated)"
+          fi
+          echo "✅ Deployment to ${TARGET_ENV} completed (simulated)."

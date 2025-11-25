@@ -1,0 +1,111 @@
+name: Mirror GitHub to Bitbucket
+
+# Handle multiple cases:
+# 1. PR opened/updated/synchronized -> mirror PR branch to Bitbucket
+# 2. PR closed (not merged) -> delete PR branch from Bitbucket (without merging)
+# 3. PR merged -> mirror base branch to Bitbucket
+# Only runs for PRs targeting: main or master
+# Note: Release branches (release/staging, release/production) are excluded to prevent automatic deployments
+# Deployments to staging/production must be triggered manually via manual-deployment.yml workflow
+# - add any specific branches here if needed
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+    branches:
+      - main
+      - master
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    env:
+      # Controls whether the automation deletes Bitbucket branches when PRs are closed without merging.
+      # Default is "true" to match the current behavior (delete PR branches on close).
+      # Set this to "false" if your Bitbucket policy forbids branch deletion by automation.
+      ALLOW_BRANCH_DELETION: "true"
+
+    steps:
+      - name: Checkout appropriate branch
+        uses: actions/checkout@v4
+        with:
+          # If PR is merged, checkout base branch (main/master)
+          # Otherwise, checkout PR head branch
+          ref: ${{ github.event.pull_request.merged && github.event.pull_request.base.ref || github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: List files in .github
+        uses: ./.github/actions/list-files
+
+      - name: Set up Git identity
+        env:
+          BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
+        run: |
+          git config --global user.name "GitHub Actions Bot - Mirror"
+          git config --global user.email "${BITBUCKET_USER_EMAIL}"
+
+      - name: Mirror or delete branch on Bitbucket
+        id: mirror
+        uses: ./.github/actions/mirror-to-bitbucket
+        with:
+          bitbucket_username: ${{ secrets.BITBUCKET_USERNAME }}
+          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+          bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
+          bitbucket_user_email: ${{ secrets.BITBUCKET_USER_EMAIL }}
+          # If PR is merged -> mirror base branch (main/master)
+          # If PR is closed (not merged) -> delete PR head branch (without merging)
+          # Otherwise -> mirror PR head branch
+          branch_name: ${{ github.event.pull_request.merged && github.event.pull_request.base.ref || github.event.pull_request.head.ref }}
+          # Delete branch if PR is closed and not merged, otherwise push
+          action_type: ${{ github.event.action == 'closed' && !github.event.pull_request.merged && 'delete' || 'push' }}
+          # Honor the ALLOW_BRANCH_DELETION flag when action_type is "delete"
+          allow_branch_deletion: ${{ env.ALLOW_BRANCH_DELETION }}
+
+      - name: Wait for Bitbucket pipeline triggered by the mirror push
+        id: wait-pipeline
+        # Wait for pipeline only if:
+        # 1. PR is not closed/unmerged (no pipeline to wait for when deleting branches)
+        # 2. bitbucket-pipelines.yml exists in the repository (pipelines are configured)
+        # The check is done in the mirror action, which sets pipelines_configured output
+        if: ${{ !(github.event.action == 'closed' && !github.event.pull_request.merged) && steps.mirror.outputs.pipelines_configured == 'true' }}
+        uses: ./.github/actions/wait-for-bitbucket-pipeline
+        with:
+          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+          bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
+          # Use the triggered pipeline UUID to find the correct pipeline from the list
+          expected_pipeline_uuid: ${{ steps.mirror.outputs.triggered_pipeline_uuid }}
+          poll_interval: 30
+          max_attempts: 60
+
+      - name: Summarize Bitbucket pipeline result
+        # Always run this summary, even if the pipeline failed or the wait step was skipped
+        if: always()
+        env:
+          BB_PIPELINE_URL: ${{ steps.wait-pipeline.outputs.pipeline_url }}
+          BB_PIPELINE_STATE: ${{ steps.wait-pipeline.outputs.pipeline_state }}
+          BB_PIPELINE_RESULT: ${{ steps.wait-pipeline.outputs.pipeline_result }}
+          BB_PIPELINE_ERROR: ${{ steps.wait-pipeline.outputs.error_message }}
+        run: |
+          echo "=== Bitbucket pipeline summary ==="
+
+          # Print pipeline URL if we have one
+          if [ -n "$BB_PIPELINE_URL" ]; then
+            echo "Pipeline URL: $BB_PIPELINE_URL"
+          else
+            echo "Pipeline URL: (not available)"
+          fi
+
+          # Print final state and result if available
+          if [ -n "$BB_PIPELINE_STATE" ]; then
+            echo "Final state: $BB_PIPELINE_STATE"
+          fi
+
+          if [ -n "$BB_PIPELINE_RESULT" ]; then
+            echo "Final result: $BB_PIPELINE_RESULT"
+          fi
+
+          # On failure, include the error_message from the wait action for easier debugging
+          if [ -n "$BB_PIPELINE_ERROR" ]; then
+            echo ""
+            echo "Bitbucket pipeline error details:"
+            printf '%s\n' "$BB_PIPELINE_ERROR"
+          fi
