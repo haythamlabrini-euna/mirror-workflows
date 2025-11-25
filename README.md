@@ -27,7 +27,7 @@ on:
 
 jobs:
   mirror:
-    uses: YOUR_ORG/mirror-workflows/.github/workflows/reusable-mirror-to-bitbucket.yml@main
+    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-mirror-to-bitbucket.yml@main
     with:
       branch_name: ${{ github.event.pull_request.head.ref || github.ref_name }}
       action_type: ${{ github.event.action == 'closed' && !github.event.pull_request.merged && 'delete' || 'push' }}
@@ -59,7 +59,7 @@ jobs:
           fetch-depth: 0
 
       - name: Mirror to Bitbucket
-        uses: YOUR_ORG/mirror-workflows/.github/actions/mirror-to-bitbucket@main
+        uses: haythamlabrini-euna/mirror-workflows/.github/actions/mirror-to-bitbucket@main
         with:
           bitbucket_username: ${{ secrets.BITBUCKET_USERNAME }}
           bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
@@ -68,7 +68,7 @@ jobs:
           branch_name: ${{ github.ref_name }}
 
       - name: Wait for Bitbucket Pipeline
-        uses: YOUR_ORG/mirror-workflows/.github/actions/wait-for-bitbucket-pipeline@main
+        uses: haythamlabrini-euna/mirror-workflows/.github/actions/wait-for-bitbucket-pipeline@main
         with:
           bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
           bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
@@ -113,7 +113,7 @@ Set these secrets in your repository:
 Mirrors a branch to Bitbucket.
 
 ```yaml
-- uses: YOUR_ORG/mirror-workflows/.github/actions/mirror-to-bitbucket@main
+- uses: haythamlabrini-euna/mirror-workflows/.github/actions/mirror-to-bitbucket@main
   with:
     bitbucket_username: ${{ secrets.BITBUCKET_USERNAME }}
     bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
@@ -136,7 +136,7 @@ Mirrors a branch to Bitbucket.
 Polls Bitbucket API to wait for a pipeline to complete.
 
 ```yaml
-- uses: YOUR_ORG/mirror-workflows/.github/actions/wait-for-bitbucket-pipeline@main
+- uses: haythamlabrini-euna/mirror-workflows/.github/actions/wait-for-bitbucket-pipeline@main
   with:
     bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
     bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
@@ -199,7 +199,7 @@ jobs:
 
       - name: Mirror branch
         id: mirror
-        uses: YOUR_ORG/mirror-workflows/.github/actions/mirror-to-bitbucket@main
+        uses: haythamlabrini-euna/mirror-workflows/.github/actions/mirror-to-bitbucket@main
         with:
           bitbucket_username: ${{ secrets.BITBUCKET_USERNAME }}
           bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
@@ -212,7 +212,7 @@ jobs:
 
       - name: Wait for pipeline
         if: ${{ !(github.event.action == 'closed' && !github.event.pull_request.merged) && steps.mirror.outputs.pipelines_configured == 'true' }}
-        uses: YOUR_ORG/mirror-workflows/.github/actions/wait-for-bitbucket-pipeline@main
+        uses: haythamlabrini-euna/mirror-workflows/.github/actions/wait-for-bitbucket-pipeline@main
         with:
           bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
           bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
