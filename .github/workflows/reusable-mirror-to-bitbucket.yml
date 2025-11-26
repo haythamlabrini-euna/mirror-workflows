@@ -170,7 +170,6 @@ jobs:
         id: mirror
         env:
           BRANCH_NAME: ${{ inputs.branch_name }}
-          FORCE_TRIGGER: ${{ inputs.force_trigger }}
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
           BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
         run: |
@@ -191,38 +190,45 @@ jobs:
             echo "pipelines_configured=false" >> $GITHUB_OUTPUT
           fi
           
-          # Check if commits match
-          if [[ -n "$REMOTE_COMMIT" && "$CURRENT_COMMIT" == "$REMOTE_COMMIT" && "$FORCE_TRIGGER" != "true" ]]; then
-            echo "Commits match ($CURRENT_COMMIT). Triggering pipeline via API..."
-            echo "push_occurred=true" >> $GITHUB_OUTPUT
-            echo "trigger_pipeline=true" >> $GITHUB_OUTPUT
-            echo "branch_pushed=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+          # Always force push to ensure GitHub branch overwrites Bitbucket branch
+          echo "Force pushing branch '${BRANCH_NAME}' to Bitbucket..."
+          echo "GitHub commit: ${CURRENT_COMMIT}"
+          if [[ -n "$REMOTE_COMMIT" ]]; then
+            echo "Bitbucket commit: ${REMOTE_COMMIT}"
           else
-            # Different commit or force trigger or new branch
-            echo "Pushing branch '${BRANCH_NAME}' to Bitbucket..."
+            echo "Bitbucket branch does not exist yet, will be created"
+          fi
+          
+          # Always use --force to overwrite any divergent history on Bitbucket
+          if output=$(git push --force bitbucket "HEAD:${BRANCH_NAME}" 2>&1); then
+            echo "$output"
+            echo "✅ Branch '${BRANCH_NAME}' force pushed to Bitbucket"
+            echo "push_occurred=true" >> $GITHUB_OUTPUT
+            echo "branch_pushed=${BRANCH_NAME}" >> $GITHUB_OUTPUT
             
-            # Use --force to overwrite any divergent history on Bitbucket
-            if output=$(git push --force bitbucket "HEAD:${BRANCH_NAME}" 2>&1); then
-              echo "$output"
-              echo "✅ Branch '${BRANCH_NAME}' pushed to Bitbucket"
-              echo "push_occurred=true" >> $GITHUB_OUTPUT
-              echo "trigger_pipeline=false" >> $GITHUB_OUTPUT
-              echo "branch_pushed=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+            # If commits matched before push, trigger pipeline via API instead
+            if [[ -n "$REMOTE_COMMIT" && "$CURRENT_COMMIT" == "$REMOTE_COMMIT" ]]; then
+              echo "Commits matched - pipeline will be triggered via API"
+              echo "trigger_pipeline=true" >> $GITHUB_OUTPUT
             else
-              echo "$output"
-              echo "❌ Failed to push branch '${BRANCH_NAME}' to Bitbucket."
-              
-              if echo "$output" | grep -q "pre-receive hook declined"; then
-                echo "::error::⛔ PERMISSION DENIED: Bitbucket branch protection blocked the push."
-                echo "👉 SOLUTION: Go to Bitbucket Settings > Branching model > Branch permissions."
-              else
-                echo "=== Bitbucket / GitHub Divergence Detected ==="
-                echo "GitHub commit: ${CURRENT_COMMIT}"
-                echo "Bitbucket commit: ${REMOTE_COMMIT}"
-                echo "::error::Divergence or other error detected. See logs above."
-              fi
-              exit 1
+              echo "trigger_pipeline=false" >> $GITHUB_OUTPUT
             fi
+          else
+            echo "$output"
+            echo "❌ Failed to force push branch '${BRANCH_NAME}' to Bitbucket."
+            
+            if echo "$output" | grep -q "pre-receive hook declined"; then
+              echo "::error::⛔ PERMISSION DENIED: Bitbucket branch protection blocked the push."
+              echo "👉 SOLUTION: Go to Bitbucket Settings > Branching model > Branch permissions."
+            else
+              echo "=== Bitbucket Push Error ==="
+              echo "GitHub commit: ${CURRENT_COMMIT}"
+              if [[ -n "$REMOTE_COMMIT" ]]; then
+                echo "Bitbucket commit: ${REMOTE_COMMIT}"
+              fi
+              echo "::error::Push failed. See logs above."
+            fi
+            exit 1
           fi
 
       - name: Trigger Bitbucket Pipeline (if needed)
