@@ -13,4 +13,3 @@
   "include": [".github/actions/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
-
