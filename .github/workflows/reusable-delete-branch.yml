@@ -1,0 +1,136 @@
+# Reusable workflow for deleting a branch from Bitbucket
+#
+# This workflow deletes a branch from Bitbucket. Used for PR cleanup when:
+# - PR is closed without merge (optionally delete the PR branch)
+# - PR is merged (delete the PR branch for cleanup)
+#
+# Note: When a PR is merged, the merge commit on main/master triggers a push event.
+# That push event should call reusable-mirror-branch.yml to mirror the default branch.
+# This workflow only handles the cleanup (deletion) of the PR branch.
+#
+# Usage:
+#   uses: <owner>/mirror-workflows/.github/workflows/reusable-delete-branch.yml@main
+#
+# Example caller workflow:
+#   on:
+#     pull_request:
+#       types: [closed]
+#
+#   jobs:
+#     cleanup:
+#       if: github.event.action == 'closed'
+#       uses: <owner>/mirror-workflows/.github/workflows/reusable-delete-branch.yml@main
+#       with:
+#         branch_name: ${{ github.event.pull_request.head.ref }}
+#       secrets:
+#         BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+#         BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+#         BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+#
+name: Reusable Delete Branch from Bitbucket
+
+on:
+  workflow_call:
+    inputs:
+      branch_name:
+        description: 'Branch name to delete from Bitbucket'
+        required: true
+        type: string
+      allow_deletion:
+        description: 'If false, skip deletion. Useful for controlling cleanup behavior.'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      BITBUCKET_USERNAME:
+        description: 'Bitbucket username or x-token-auth'
+        required: true
+      BITBUCKET_API_TOKEN:
+        description: 'Bitbucket API token with repo write permissions'
+        required: true
+      BITBUCKET_REPO:
+        description: 'Bitbucket repository path in owner/repo format'
+        required: true
+    outputs:
+      branch_deleted:
+        description: 'Whether the branch was actually deleted'
+        value: ${{ jobs.delete.outputs.branch_deleted }}
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    outputs:
+      branch_deleted: ${{ steps.delete-branch.outputs.branch_deleted }}
+
+    steps:
+      # Step 1: Minimal checkout (just need git commands, not repo content)
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Step 2: Configure Bitbucket remote with authentication
+      - name: Configure Bitbucket Remote
+        env:
+          BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+        run: |
+          # Disable credential helpers to prevent interactive prompts
+          git config --local credential.helper ""
+          git config --global credential.helper ""
+          
+          # Disable GIT_ASKPASS to prevent interactive credential prompts
+          export GIT_ASKPASS=""
+          export SSH_ASKPASS=""
+          
+          # Create Base64 encoded credentials for http.extraHeader (backup method)
+          AUTH=$(echo -n "${BITBUCKET_USERNAME}:${BITBUCKET_API_TOKEN}" | base64 -w 0)
+          
+          # Configure http.extraHeader as a backup authentication method
+          git config --local http.https://bitbucket.org/.extraHeader "Authorization: Basic ${AUTH}"
+          
+          # Remove any existing bitbucket remote first
+          git remote remove bitbucket 2>/dev/null || true
+          
+          # Add remote with credentials embedded in URL (most reliable for automation)
+          git remote add bitbucket "https://${BITBUCKET_USERNAME}:${BITBUCKET_API_TOKEN}@bitbucket.org/${BITBUCKET_REPO}.git"
+          
+          # Validate remote was added
+          echo "Validating Bitbucket remote..."
+          git remote get-url bitbucket
+
+      # Step 3: Delete branch from Bitbucket
+      - name: Delete Branch from Bitbucket
+        id: delete-branch
+        env:
+          BRANCH_NAME: ${{ inputs.branch_name }}
+          ALLOW_DELETION: ${{ inputs.allow_deletion }}
+        run: |
+          # Check if deletion is allowed
+          if [[ "$ALLOW_DELETION" == "false" ]]; then
+            echo "ℹ️ Skipping deletion of Bitbucket branch '${BRANCH_NAME}' because allow_deletion is false."
+            echo "branch_deleted=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Fetch remote refs to check if branch exists
+          git fetch bitbucket --all 2>/dev/null || true
+          
+          # Check if branch exists on Bitbucket
+          if git ls-remote --heads bitbucket "${BRANCH_NAME}" | grep -q .; then
+            # Branch exists, delete it
+            if git push bitbucket ":${BRANCH_NAME}"; then
+              echo "✅ Branch '${BRANCH_NAME}' deleted from Bitbucket"
+              echo "branch_deleted=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Failed to delete branch '${BRANCH_NAME}' from Bitbucket"
+              echo "branch_deleted=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          else
+            # Branch doesn't exist, nothing to delete
+            echo "ℹ️ Branch '${BRANCH_NAME}' does not exist on Bitbucket (already deleted or never pushed)"
+            echo "branch_deleted=false" >> $GITHUB_OUTPUT
+          fi
+

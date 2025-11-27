@@ -9,9 +9,18 @@ Reusable GitHub Actions and workflows for mirroring repositories to Bitbucket.
 - **Wait for Bitbucket pipelines** to complete and report status
 - **Trigger pipelines** via API when commits already exist
 
+## Reusable Workflows
+
+This repository provides two purpose-specific reusable workflows:
+
+| Workflow | Purpose | When to Use |
+|----------|---------|-------------|
+| `reusable-mirror-branch.yml` | Mirror a branch to Bitbucket | Push events, PR opened/synchronized |
+| `reusable-delete-branch.yml` | Delete a branch from Bitbucket | PR closed (merged or not) |
+
 ## Quick Start
 
-### Option 1: Use the Reusable Workflow (Recommended)
+### Recommended: Use Split Workflows
 
 The simplest way to use this from another repository:
 
@@ -20,23 +29,47 @@ The simplest way to use this from another repository:
 name: Mirror to Bitbucket
 
 on:
+  # Mirror default branch (main/master) when commits are pushed
   push:
-    branches: [main, develop]
+    branches: [main, master]
+  # Handle PR events: mirror PR branch, cleanup on close/merge
   pull_request:
-    types: [opened, synchronize, closed]
+    types: [opened, synchronize, reopened, closed]
+    branches: [main, master]
 
 jobs:
+  # Job 1: Mirror branch on push or PR open/sync
   mirror:
-    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-mirror-to-bitbucket.yml@main
+    if: github.event_name == 'push' || github.event.action != 'closed'
+    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-mirror-branch.yml@main
     with:
       branch_name: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      action_type: ${{ github.event.action == 'closed' && !github.event.pull_request.merged && 'delete' || 'push' }}
     secrets:
       BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
       BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
       BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
       BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
+
+  # Job 2: Delete PR branch on close (merged or not)
+  cleanup:
+    if: github.event.action == 'closed'
+    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-delete-branch.yml@main
+    with:
+      branch_name: ${{ github.event.pull_request.head.ref }}
+    secrets:
+      BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+      BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+      BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
 ```
+
+**How it works:**
+
+| GitHub Event | Workflow Called | Result on Bitbucket |
+|--------------|-----------------|---------------------|
+| Push to main/master | `reusable-mirror-branch.yml` | Mirrors default branch |
+| PR opened/synchronized | `reusable-mirror-branch.yml` | Mirrors PR branch |
+| PR closed (not merged) | `reusable-delete-branch.yml` | Deletes PR branch |
+| PR merged | `reusable-delete-branch.yml` | Deletes PR branch (main mirrored via push event) |
 
 ### Option 2: Use Composite Actions Directly
 
@@ -85,19 +118,22 @@ Set these secrets in your repository:
 | `BITBUCKET_REPO` | Bitbucket repository in `workspace/repo-slug` format |
 | `BITBUCKET_USER_EMAIL` | Email address for git commits |
 
-## Reusable Workflow Inputs
+## Reusable Workflow Reference
+
+### `reusable-mirror-branch.yml`
+
+Mirrors a branch from GitHub to Bitbucket, optionally waits for pipeline.
+
+**Inputs:**
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `branch_name` | Yes | - | Branch name to push or delete |
-| `action_type` | No | `push` | Action: `push` or `delete` |
-| `force_trigger` | No | `false` | Force push even if commit exists |
-| `allow_branch_deletion` | No | `true` | Allow branch deletion on Bitbucket |
+| `branch_name` | Yes | - | Branch name to mirror |
 | `wait_for_pipeline` | No | `true` | Wait for Bitbucket pipeline to complete |
 | `poll_interval` | No | `30` | Seconds between pipeline status checks |
 | `max_attempts` | No | `60` | Max polling attempts before timeout |
 
-## Workflow Outputs
+**Outputs:**
 
 | Output | Description |
 |--------|-------------|
@@ -105,6 +141,23 @@ Set these secrets in your repository:
 | `push_occurred` | Whether a push actually occurred |
 | `pipeline_result` | Final result of the Bitbucket pipeline |
 | `pipeline_url` | URL to view the pipeline in Bitbucket |
+
+### `reusable-delete-branch.yml`
+
+Deletes a branch from Bitbucket (for PR cleanup).
+
+**Inputs:**
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `branch_name` | Yes | - | Branch name to delete |
+| `allow_deletion` | No | `true` | If false, skip deletion |
+
+**Outputs:**
+
+| Output | Description |
+|--------|-------------|
+| `branch_deleted` | Whether the branch was actually deleted |
 
 ## Actions Reference
 
@@ -179,6 +232,69 @@ This creates the `dist/` folders needed by the composite actions.
 
 ## Complete Example: PR Mirroring Workflow
 
+### Using Split Reusable Workflows (Recommended)
+
+This example handles all PR scenarios using the split workflows:
+
+```yaml
+# .github/workflows/mirror.yml
+name: Mirror to Bitbucket
+
+on:
+  # Mirror default branch when commits are pushed (including merge commits)
+  push:
+    branches: [main, master]
+  # Handle PR lifecycle events
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main, master]
+
+jobs:
+  # Mirror branch on push events or PR open/sync
+  mirror:
+    if: github.event_name == 'push' || github.event.action != 'closed'
+    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-mirror-branch.yml@main
+    with:
+      branch_name: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      wait_for_pipeline: true
+    secrets:
+      BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+      BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+      BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+      BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
+
+  # Delete PR branch on close (merged or not)
+  cleanup:
+    if: github.event.action == 'closed'
+    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-delete-branch.yml@main
+    with:
+      branch_name: ${{ github.event.pull_request.head.ref }}
+      allow_deletion: true
+    secrets:
+      BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+      BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+      BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+```
+
+**Event Flow:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           PR LIFECYCLE EVENTS                               │
+├─────────────────────────┬───────────────────────────────────────────────────┤
+│ PR opened/synchronized  │ → reusable-mirror-branch.yml → Mirror PR branch  │
+├─────────────────────────┼───────────────────────────────────────────────────┤
+│ PR closed (not merged)  │ → reusable-delete-branch.yml → Delete PR branch  │
+├─────────────────────────┼───────────────────────────────────────────────────┤
+│ PR merged               │ → reusable-delete-branch.yml → Delete PR branch  │
+│                         │ → (push event) → Mirror main/master              │
+└─────────────────────────┴───────────────────────────────────────────────────┘
+```
+
+### Using Composite Actions Directly
+
+For more control, use the individual actions:
+
 ```yaml
 # .github/workflows/mirror-pr.yml
 name: Mirror PRs to Bitbucket
@@ -190,11 +306,12 @@ on:
 
 jobs:
   mirror:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merged && github.event.pull_request.base.ref || github.event.pull_request.head.ref }}
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
       - name: Mirror branch
@@ -205,19 +322,41 @@ jobs:
           bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
           bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
           bitbucket_user_email: ${{ secrets.BITBUCKET_USER_EMAIL }}
-          # Mirror base branch if merged, otherwise mirror PR branch
-          branch_name: ${{ github.event.pull_request.merged && github.event.pull_request.base.ref || github.event.pull_request.head.ref }}
-          # Delete branch if PR closed without merge
-          action_type: ${{ github.event.action == 'closed' && !github.event.pull_request.merged && 'delete' || 'push' }}
+          branch_name: ${{ github.event.pull_request.head.ref }}
+          action_type: push
 
       - name: Wait for pipeline
-        if: ${{ !(github.event.action == 'closed' && !github.event.pull_request.merged) && steps.mirror.outputs.pipelines_configured == 'true' }}
+        if: steps.mirror.outputs.pipelines_configured == 'true'
         uses: haythamlabrini-euna/mirror-workflows/.github/actions/wait-for-bitbucket-pipeline@main
         with:
           bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
           bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
           expected_pipeline_uuid: ${{ steps.mirror.outputs.triggered_pipeline_uuid }}
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Delete branch
+        uses: haythamlabrini-euna/mirror-workflows/.github/actions/mirror-to-bitbucket@main
+        with:
+          bitbucket_username: ${{ secrets.BITBUCKET_USERNAME }}
+          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+          bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
+          bitbucket_user_email: ${{ secrets.BITBUCKET_USER_EMAIL }}
+          branch_name: ${{ github.event.pull_request.head.ref }}
+          action_type: delete
 ```
+
+**Note**: When using composite actions directly, you'll need a separate workflow for `push` events to handle default branch mirroring.
+
+## Deprecated Workflow
+
+The combined workflow `reusable-mirror-to-bitbucket.yml` is deprecated but kept for backward compatibility. Please migrate to the split workflows above.
 
 ## License
 
