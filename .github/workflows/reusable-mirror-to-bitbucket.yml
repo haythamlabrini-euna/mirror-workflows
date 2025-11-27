@@ -16,6 +16,14 @@
 #         BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
 #         BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
 #
+# Branch Name Resolution:
+#   The workflow automatically determines the correct branch name using this priority:
+#   1. Push events: Uses github.ref_name (ensures main/master on PR merge)
+#   2. Merged PRs: Uses github.event.pull_request.base.ref (main/master)
+#   3. Fallback: Uses the branch_name input parameter
+#   This ensures that when PRs are merged, the main/master branch is mirrored,
+#   not the PR branch.
+#
 name: Reusable Mirror to Bitbucket
 
 on:
@@ -105,10 +113,14 @@ jobs:
 
     steps:
       # Checkout the calling repository (the one being mirrored)
+      # Priority: push events -> merged PR base branch -> input parameter
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch_name }}
+          # For push events (including PR merges): use github.ref_name (main/master)
+          # For merged PRs: use base branch (main/master)
+          # Otherwise: use input parameter (PR branch or fallback)
+          ref: ${{ github.event_name == 'push' && github.ref_name || (github.event_name == 'pull_request' && github.event.pull_request.merged && github.event.pull_request.base.ref) || inputs.branch_name }}
           fetch-depth: 0
 
       - name: Set up Git identity
@@ -159,7 +171,10 @@ jobs:
         if: inputs.action_type == 'delete'
         id: delete-branch
         env:
-          BRANCH_NAME: ${{ inputs.branch_name }}
+          # For push events: use github.ref_name
+          # For merged PRs: use base branch
+          # Otherwise: use input parameter
+          BRANCH_NAME: ${{ github.event_name == 'push' && github.ref_name || (github.event_name == 'pull_request' && github.event.pull_request.merged && github.event.pull_request.base.ref) || inputs.branch_name }}
           ALLOW_BRANCH_DELETION: ${{ inputs.allow_branch_deletion }}
         run: |
           if [[ "$ALLOW_BRANCH_DELETION" == "false" ]]; then
@@ -184,7 +199,10 @@ jobs:
         if: inputs.action_type != 'delete'
         id: mirror
         env:
-          BRANCH_NAME: ${{ inputs.branch_name }}
+          # For push events: use github.ref_name (main/master)
+          # For merged PRs: use base branch (main/master)
+          # Otherwise: use input parameter (PR branch or fallback)
+          BRANCH_NAME: ${{ github.event_name == 'push' && github.ref_name || (github.event_name == 'pull_request' && github.event.pull_request.merged && github.event.pull_request.base.ref) || inputs.branch_name }}
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
           BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
         run: |
@@ -252,7 +270,10 @@ jobs:
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
           BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
-          BRANCH_NAME: ${{ inputs.branch_name }}
+          # For push events: use github.ref_name
+          # For merged PRs: use base branch
+          # Otherwise: use input parameter
+          BRANCH_NAME: ${{ github.event_name == 'push' && github.ref_name || (github.event_name == 'pull_request' && github.event.pull_request.merged && github.event.pull_request.base.ref) || inputs.branch_name }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
           # Extract workspace and repo slug

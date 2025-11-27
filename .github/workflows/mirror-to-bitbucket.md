@@ -2,7 +2,9 @@
 
 ## What This Workflow Does
 
-This workflow automatically keeps your Bitbucket repository in sync with your GitHub repository and waits for Bitbucket pipelines to complete. It runs whenever someone opens, updates, synchronizes, reopens, or closes a pull request on GitHub.
+This workflow automatically keeps your Bitbucket repository in sync with your GitHub repository and waits for Bitbucket pipelines to complete. It runs whenever:
+- Someone pushes directly to `main` or `master` (including PR merges)
+- Someone opens, updates, synchronizes, reopens, or closes a pull request targeting `main` or `master`
 
 The workflow performs two main functions:
 1. **Mirroring**: Copies branches from GitHub to Bitbucket
@@ -11,6 +13,7 @@ The workflow performs two main functions:
 ## When It Runs
 
 The workflow starts automatically when:
+- A **push** occurs to `main` or `master` (including when a PR is merged)
 - A pull request is **opened** targeting `main` or `master`
 - A pull request is **reopened** targeting `main` or `master`
 - A pull request is **synchronized** (new commits are added) targeting `main` or `master`
@@ -22,7 +25,18 @@ The workflow starts automatically when:
 
 ## What Happens in Each Scenario
 
-### Scenario 1: Pull Request Opened, Reopened, or Updated
+### Scenario 1: Push to Main/Master (Including PR Merges)
+
+When someone pushes directly to `main` or `master` (including when a PR is merged):
+- The workflow checks out the pushed branch (`main` or `master`)
+- It copies that branch to Bitbucket (or triggers the pipeline via API if the commit already exists)
+- The branch name stays the same on both platforms
+- It waits for the Bitbucket pipeline to complete
+- The workflow succeeds if the pipeline succeeds, or fails if the pipeline fails
+
+**Idempotent Behavior**: If the same commit already exists on Bitbucket, the workflow doesn't push again. Instead, it triggers the pipeline via the Bitbucket API to avoid duplicate pushes while still running the pipeline.
+
+### Scenario 2: Pull Request Opened, Reopened, or Updated
 
 When someone opens a pull request, reopens it, or adds new commits to it:
 - The workflow checks out the pull request branch
@@ -33,7 +47,7 @@ When someone opens a pull request, reopens it, or adds new commits to it:
 
 **Idempotent Behavior**: If the same commit already exists on Bitbucket, the workflow doesn't push again. Instead, it triggers the pipeline via the Bitbucket API to avoid duplicate pushes while still running the pipeline.
 
-### Scenario 2: Pull Request Closed (Not Merged)
+### Scenario 3: Pull Request Closed (Not Merged)
 
 When someone closes a pull request without merging it:
 - The workflow checks out the pull request branch.
@@ -49,10 +63,11 @@ You can control this behavior using the `ALLOW_BRANCH_DELETION` environment vari
 
 This makes it easy to align the workflow with your Bitbucket branch deletion policy while keeping the rest of the mirroring behavior unchanged.
 
-### Scenario 3: Pull Request Merged
+### Scenario 4: Pull Request Merged
 
 When a pull request is merged into the target branch (`main` or `master`):
-- The workflow checks out the target branch (base branch)
+- The workflow is triggered by the **push** event (see Scenario 1)
+- It checks out the target branch (`main` or `master`)
 - It copies the updated target branch to Bitbucket
 - This ensures Bitbucket has the latest merged code
 - It waits for the Bitbucket pipeline to complete
@@ -74,7 +89,8 @@ You need to set up these secrets in your GitHub repository settings:
 ### Step 1: Checkout the Right Branch
 
 The workflow first decides which branch to work with:
-- If the pull request was merged, it checks out the main branch (base branch)
+- For **push events** (including PR merges), it checks out the pushed branch (`main` or `master`)
+- For **PR events**: if the pull request was merged, it checks out the main branch (base branch)
 - Otherwise, it checks out the pull request branch (head branch)
 
 ### Step 2: Set Up Git Identity
@@ -142,8 +158,8 @@ If a Bitbucket pipeline fails:
 
 ## Notes
 
-- This workflow only handles pull request events. It does not mirror regular commits to branches or direct pushes.
-- The workflow **only runs for pull requests targeting**: `main` or `master`.
+- This workflow handles both **push events** (including PR merges) and **pull request events** targeting `main` or `master`.
+- The workflow **only runs for pushes to or pull requests targeting**: `main` or `master`.
 - **Release branches (`release/staging`, `release/production`) are excluded** from automatic mirroring to prevent automatic deployments.
 - Pull requests targeting other branches (including release branches) will not trigger this workflow.
 - **Deployments to staging/production must be triggered manually** using the `manual-deployment.yml` workflow.

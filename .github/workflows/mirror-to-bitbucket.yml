@@ -1,14 +1,19 @@
 name: Mirror GitHub to Bitbucket
 
 # Handle multiple cases:
-# 1. PR opened/updated/synchronized -> mirror PR branch to Bitbucket
-# 2. PR closed (not merged) -> delete PR branch from Bitbucket (without merging)
-# 3. PR merged -> mirror base branch to Bitbucket
+# 1. Push to main/master (including PR merges) -> mirror the pushed branch to Bitbucket
+# 2. PR opened/updated/synchronized -> mirror PR branch to Bitbucket
+# 3. PR closed (not merged) -> delete PR branch from Bitbucket (without merging)
+# 4. PR merged -> mirror base branch to Bitbucket (also handled by push trigger)
 # Only runs for PRs targeting: main or master
 # Note: Release branches (release/staging, release/production) are excluded to prevent automatic deployments
 # Deployments to staging/production must be triggered manually via manual-deployment.yml workflow
 # - add any specific branches here if needed
 on:
+  push:
+    branches:
+      - main
+      - master
   pull_request:
     types: [opened, reopened, synchronize, closed]
     branches:
@@ -28,9 +33,10 @@ jobs:
       - name: Checkout appropriate branch
         uses: actions/checkout@v4
         with:
-          # If PR is merged, checkout base branch (main/master)
+          # For push events (including PR merges), checkout the pushed branch (main/master)
+          # For PR events: if PR is merged, checkout base branch (main/master)
           # Otherwise, checkout PR head branch
-          ref: ${{ github.event.pull_request.merged && github.event.pull_request.base.ref || github.event.pull_request.head.ref }}
+          ref: ${{ github.event_name == 'push' && github.ref_name || (github.event.pull_request.merged && github.event.pull_request.base.ref || github.event.pull_request.head.ref) }}
           fetch-depth: 0
 
       - name: List files in .github
@@ -51,22 +57,23 @@ jobs:
           bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
           bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
           bitbucket_user_email: ${{ secrets.BITBUCKET_USER_EMAIL }}
-          # If PR is merged -> mirror base branch (main/master)
+          # For push events (including PR merges) -> mirror the pushed branch (main/master)
+          # For PR events: if PR is merged -> mirror base branch (main/master)
           # If PR is closed (not merged) -> delete PR head branch (without merging)
           # Otherwise -> mirror PR head branch
-          branch_name: ${{ github.event.pull_request.merged && github.event.pull_request.base.ref || github.event.pull_request.head.ref }}
-          # Delete branch if PR is closed and not merged, otherwise push
-          action_type: ${{ github.event.action == 'closed' && !github.event.pull_request.merged && 'delete' || 'push' }}
+          branch_name: ${{ github.event_name == 'push' && github.ref_name || (github.event.pull_request.merged && github.event.pull_request.base.ref || github.event.pull_request.head.ref) }}
+          # Delete branch only if PR is closed and not merged, otherwise push
+          action_type: ${{ github.event_name == 'pull_request' && github.event.action == 'closed' && !github.event.pull_request.merged && 'delete' || 'push' }}
           # Honor the ALLOW_BRANCH_DELETION flag when action_type is "delete"
           allow_branch_deletion: ${{ env.ALLOW_BRANCH_DELETION }}
 
       - name: Wait for Bitbucket pipeline triggered by the mirror push
         id: wait-pipeline
         # Wait for pipeline only if:
-        # 1. PR is not closed/unmerged (no pipeline to wait for when deleting branches)
+        # 1. Push event OR PR is not closed/unmerged (no pipeline to wait for when deleting branches)
         # 2. bitbucket-pipelines.yml exists in the repository (pipelines are configured)
         # The check is done in the mirror action, which sets pipelines_configured output
-        if: ${{ !(github.event.action == 'closed' && !github.event.pull_request.merged) && steps.mirror.outputs.pipelines_configured == 'true' }}
+        if: ${{ (github.event_name == 'push' || !(github.event.action == 'closed' && !github.event.pull_request.merged)) && steps.mirror.outputs.pipelines_configured == 'true' }}
         uses: ./.github/actions/wait-for-bitbucket-pipeline
         with:
           bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
