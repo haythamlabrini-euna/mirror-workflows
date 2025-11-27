@@ -32,6 +32,15 @@ async function main() {
        throw new Error('❌ Missing required input: COMMIT_SHA');
     }
 
+    // Check if bitbucket-pipelines.yml exists in the repository
+    // If it doesn't exist, skip waiting and return success immediately
+    // This prevents unnecessary API calls when pipelines aren't configured
+    const pipelinesConfigured = fs.existsSync('bitbucket-pipelines.yml');
+    if (!pipelinesConfigured) {
+      console.log('ℹ️ bitbucket-pipelines.yml not found - skipping pipeline wait');
+      process.exit(0);
+    }
+
     const [workspace, repoSlug] = BITBUCKET_REPO.split('/');
     let attempt = 0;
     let foundPipelineUuid = '';

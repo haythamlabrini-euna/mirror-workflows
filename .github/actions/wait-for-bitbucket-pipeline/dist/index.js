@@ -48,6 +48,11 @@ async function main() {
     if (!COMMIT_SHA) {
       throw new Error("\u274C Missing required input: COMMIT_SHA");
     }
+    const pipelinesConfigured = fs.existsSync("bitbucket-pipelines.yml");
+    if (!pipelinesConfigured) {
+      console.log("\u2139\uFE0F bitbucket-pipelines.yml not found - skipping pipeline wait");
+      process.exit(0);
+    }
     const [workspace, repoSlug] = BITBUCKET_REPO.split("/");
     let attempt = 0;
     let foundPipelineUuid = "";
