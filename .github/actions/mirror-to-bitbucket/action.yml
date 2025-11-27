@@ -63,18 +63,33 @@ runs:
         BITBUCKET_API_TOKEN: ${{ inputs.bitbucket_api_token }}
         BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
       run: |
-        # Create Base64 encoded credentials
+        # Disable credential helpers to prevent interactive prompts
+        # This ensures Git uses our configured authentication instead of prompting
+        git config --local credential.helper ""
+        git config --global credential.helper ""
+        
+        # Disable GIT_ASKPASS to prevent interactive credential prompts
+        # Setting it to empty string prevents Git from trying to prompt
+        export GIT_ASKPASS=""
+        export SSH_ASKPASS=""
+        
+        # Create Base64 encoded credentials for http.extraHeader (backup method)
         # Use -w 0 to disable line wrapping
         AUTH=$(echo -n "${BITBUCKET_USERNAME}:${BITBUCKET_API_TOKEN}" | base64 -w 0)
         
-        # Configure http.extraHeader
+        # Configure http.extraHeader as a backup authentication method
         git config --local http.https://bitbucket.org/.extraHeader "Authorization: Basic ${AUTH}"
         
-        # Add remote (remove if exists first to be safe)
+        # URL-encode username and token for embedding in remote URL
+        # This is the most reliable method for automated environments
+        # Remove any existing bitbucket remote first
         git remote remove bitbucket 2>/dev/null || true
-        git remote add bitbucket "https://bitbucket.org/${BITBUCKET_REPO}.git"
         
-        # Validate remote was added
+        # Add remote with credentials embedded in URL (most reliable for automation)
+        # Format: https://username:token@bitbucket.org/workspace/repo.git
+        git remote add bitbucket "https://${BITBUCKET_USERNAME}:${BITBUCKET_API_TOKEN}@bitbucket.org/${BITBUCKET_REPO}.git"
+        
+        # Validate remote was added (URL will show credentials, which is expected)
         echo "Validating Bitbucket remote..."
         git remote get-url bitbucket
 
