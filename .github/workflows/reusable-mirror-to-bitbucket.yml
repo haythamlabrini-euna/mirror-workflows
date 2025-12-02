@@ -47,10 +47,10 @@
 #       with:
 #         branch_name: ${{ github.event.pull_request.head.ref || github.ref_name }}
 #         action_type: ${{ github.event.action == 'closed' && 'delete' || 'push' }}
+#         bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
 #       secrets:
 #         BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
 #         BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-#         BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
 #         BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
 #
 # Branch Name Resolution:
@@ -112,15 +112,16 @@ on:
         required: false
         type: string
         default: 'main'
+      bitbucket_repo:
+        description: 'Bitbucket repository path in owner/repo format'
+        required: true
+        type: string
     secrets:
       BITBUCKET_USERNAME:
         description: 'Bitbucket username or x-token-auth'
         required: true
       BITBUCKET_API_TOKEN:
         description: 'Bitbucket API token with repo write permissions'
-        required: true
-      BITBUCKET_REPO:
-        description: 'Bitbucket repository path in owner/repo format'
         required: true
       BITBUCKET_USER_EMAIL:
         description: 'Email for git config'
@@ -173,7 +174,7 @@ jobs:
         env:
           BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
         run: |
           # Disable credential helpers to prevent interactive prompts
           # This ensures Git uses our configured authentication instead of prompting
@@ -250,7 +251,7 @@ jobs:
           # Otherwise: use input parameter (PR branch or fallback)
           BRANCH_NAME: ${{ github.event_name == 'push' && github.ref_name || (github.event_name == 'pull_request' && github.event.pull_request.merged && github.event.pull_request.base.ref) || inputs.branch_name }}
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
         run: |
           # Fetch the branch from Bitbucket
           git fetch bitbucket "${BRANCH_NAME}" || echo "Branch ${BRANCH_NAME} not found on Bitbucket, will create it."
@@ -315,7 +316,7 @@ jobs:
         id: trigger-pipeline
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
           # For push events: use github.ref_name
           # For merged PRs: use base branch
           # Otherwise: use input parameter
@@ -375,7 +376,7 @@ jobs:
         id: wait-pipeline
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
           COMMIT_SHA: ${{ github.sha }}
           EXPECTED_PIPELINE_UUID: ${{ steps.mirror.outputs.triggered_pipeline_uuid || steps.trigger-pipeline.outputs.triggered_pipeline_uuid }}
           POLL_INTERVAL: ${{ inputs.poll_interval }}
