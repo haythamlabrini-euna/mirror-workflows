@@ -410,7 +410,9 @@ jobs:
               RESULT=$(echo "$PIPELINE" | jq -r '.state.result.name // empty')
               FOUND_UUID="$UUID"
               
-              PIPELINE_URL="https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/${UUID}"
+              # Build URL with curly braces around UUID, then URL encode only the curly braces
+              PIPELINE_URL_RAW="https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/{${UUID}}"
+              PIPELINE_URL=$(echo -n "$PIPELINE_URL_RAW" | sed 's/{/%7B/g' | sed 's/}/%7D/g')
               
               echo "pipeline_uuid=${UUID}" >> $GITHUB_OUTPUT
               echo "pipeline_state=${STATE}" >> $GITHUB_OUTPUT
@@ -440,7 +442,10 @@ jobs:
           
           echo "❌ Timed out waiting for Bitbucket pipeline"
           if [ -n "$FOUND_UUID" ]; then
-            echo "pipeline_url=https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/${FOUND_UUID}" >> $GITHUB_OUTPUT
+            # Build URL with curly braces around UUID, then URL encode only the curly braces
+            PIPELINE_URL_RAW="https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/{${FOUND_UUID}}"
+            PIPELINE_URL=$(echo -n "$PIPELINE_URL_RAW" | sed 's/{/%7B/g' | sed 's/}/%7D/g')
+            echo "pipeline_url=${PIPELINE_URL}" >> $GITHUB_OUTPUT
           fi
           exit 1
 
