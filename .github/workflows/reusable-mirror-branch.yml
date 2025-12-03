@@ -187,6 +187,27 @@ jobs:
             echo "push_occurred=true" >> $GITHUB_OUTPUT
             echo "branch_pushed=${BRANCH_NAME}" >> $GITHUB_OUTPUT
             
+            # Fetch the commit ID from Bitbucket after push to ensure we wait for the exact commit
+            # that was pushed (this verifies the push succeeded and gets the actual commit on Bitbucket)
+            BITBUCKET_COMMIT_SHA=$(git ls-remote bitbucket "${BRANCH_NAME}" | awk '{print $1}')
+            if [[ -n "$BITBUCKET_COMMIT_SHA" ]]; then
+              echo "Bitbucket commit SHA after push: ${BITBUCKET_COMMIT_SHA}"
+              echo "bitbucket_commit_sha=${BITBUCKET_COMMIT_SHA}" >> $GITHUB_OUTPUT
+              
+              # Compare GitHub and Bitbucket commit SHAs to detect mismatches
+              if [[ "$CURRENT_COMMIT" != "$BITBUCKET_COMMIT_SHA" ]]; then
+                echo "::warning::Commit SHA mismatch detected!"
+                echo "GitHub commit SHA: ${CURRENT_COMMIT}"
+                echo "Bitbucket commit SHA: ${BITBUCKET_COMMIT_SHA}"
+                echo "The commits do not match - this may indicate an issue with the push or commit rewriting."
+              else
+                echo "✅ Commit SHAs match: ${CURRENT_COMMIT}"
+              fi
+            else
+              echo "::error::Failed to fetch commit SHA from Bitbucket after push"
+              exit 1
+            fi
+            
             # If commits matched before push, we need to trigger pipeline via API
             # (Bitbucket won't auto-trigger if no change detected)
             if [[ -n "$REMOTE_COMMIT" && "$CURRENT_COMMIT" == "$REMOTE_COMMIT" ]]; then
@@ -280,7 +301,7 @@ jobs:
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
           BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
-          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_SHA: ${{ steps.mirror.outputs.bitbucket_commit_sha }}
           EXPECTED_PIPELINE_UUID: ${{ steps.mirror.outputs.triggered_pipeline_uuid || steps.trigger-pipeline.outputs.triggered_pipeline_uuid }}
           POLL_INTERVAL: ${{ inputs.poll_interval }}
           MAX_ATTEMPTS: ${{ inputs.max_attempts }}
