@@ -1,12 +1,12 @@
 name: 'Wait for Bitbucket Pipeline'
 description: 'Polls Bitbucket API to wait for a pipeline to complete for a specific commit'
+#
+# NOTE: BITBUCKET_REPO is hardcoded in this action (search for "bf_dev/repo-name")
+#       Update all occurrences of "bf_dev/repo-name" to your actual Bitbucket repository path.
 
 inputs:
   bitbucket_api_token:
     description: 'Bitbucket API token with repository read permissions'
-    required: true
-  bitbucket_repo:
-    description: 'Bitbucket repository path in owner/repo format'
     required: true
   commit_sha:
     description: 'Git commit SHA to check pipeline for (defaults to HEAD if not provided)'
@@ -59,7 +59,7 @@ runs:
       shell: bash
       env:
         BITBUCKET_API_TOKEN: ${{ inputs.bitbucket_api_token }}
-        BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+        BITBUCKET_REPO: "bf_dev/repo-name"
         # Use provided input OR detected SHA
         COMMIT_SHA: ${{ inputs.commit_sha || steps.sha.outputs.commit_sha }}
         POLL_INTERVAL: ${{ inputs.poll_interval }}

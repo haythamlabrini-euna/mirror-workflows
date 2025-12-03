@@ -4,6 +4,9 @@
 # - PR is closed without merge (optionally delete the PR branch)
 # - PR is merged (delete the PR branch for cleanup)
 #
+# NOTE: BITBUCKET_REPO is hardcoded in this workflow (search for "bf_dev/repo-name")
+#       Update all occurrences of "bf_dev/repo-name" to your actual Bitbucket repository path.
+#
 # Note: When a PR is merged, the merge commit on main/master triggers a push event.
 # That push event should call reusable-mirror-branch.yml to mirror the default branch.
 # This workflow only handles the cleanup (deletion) of the PR branch.
@@ -25,7 +28,6 @@
 #       secrets:
 #         BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
 #         BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-#         BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
 #
 name: Reusable Delete Branch from Bitbucket
 
@@ -47,9 +49,6 @@ on:
         required: true
       BITBUCKET_API_TOKEN:
         description: 'Bitbucket API token with repo write permissions'
-        required: true
-      BITBUCKET_REPO:
-        description: 'Bitbucket repository path in owner/repo format'
         required: true
     outputs:
       branch_deleted:
@@ -74,7 +73,7 @@ jobs:
         env:
           BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+          BITBUCKET_REPO: "bf_dev/repo-name"
         run: |
           # Disable credential helpers to prevent interactive prompts
           git config --local credential.helper ""

@@ -3,6 +3,9 @@
 # This workflow mirrors a branch from GitHub to Bitbucket and optionally
 # waits for the Bitbucket pipeline to complete.
 #
+# NOTE: BITBUCKET_REPO is hardcoded in this workflow (search for "bf_dev/repo-name")
+#       Update all occurrences of "bf_dev/repo-name" to your actual Bitbucket repository path.
+#
 # Usage:
 #   uses: <owner>/mirror-workflows/.github/workflows/reusable-mirror-branch.yml@main
 #
@@ -32,7 +35,6 @@
 #       secrets:
 #         BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
 #         BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-#         BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
 #         BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
 #
 name: Reusable Mirror Branch to Bitbucket
@@ -65,9 +67,6 @@ on:
         required: true
       BITBUCKET_API_TOKEN:
         description: 'Bitbucket API token with repo write permissions'
-        required: true
-      BITBUCKET_REPO:
-        description: 'Bitbucket repository path in owner/repo format'
         required: true
       BITBUCKET_USER_EMAIL:
         description: 'Email for git config'
@@ -116,7 +115,7 @@ jobs:
         env:
           BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+          BITBUCKET_REPO: "bf_dev/repo-name"
         run: |
           # Disable credential helpers to prevent interactive prompts
           git config --local credential.helper ""
@@ -148,7 +147,7 @@ jobs:
         env:
           BRANCH_NAME: ${{ inputs.branch_name }}
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+          BITBUCKET_REPO: "bf_dev/repo-name"
         run: |
           # Fetch the branch from Bitbucket to check if it exists
           git fetch bitbucket "${BRANCH_NAME}" || echo "Branch ${BRANCH_NAME} not found on Bitbucket, will create it."
@@ -217,7 +216,7 @@ jobs:
         id: trigger-pipeline
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+          BITBUCKET_REPO: "bf_dev/repo-name"
           BRANCH_NAME: ${{ inputs.branch_name }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
@@ -276,7 +275,7 @@ jobs:
         id: wait-pipeline
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+          BITBUCKET_REPO: "bf_dev/repo-name"
           COMMIT_SHA: ${{ github.sha }}
           EXPECTED_PIPELINE_UUID: ${{ steps.mirror.outputs.triggered_pipeline_uuid || steps.trigger-pipeline.outputs.triggered_pipeline_uuid }}
           POLL_INTERVAL: ${{ inputs.poll_interval }}

@@ -1,5 +1,8 @@
 name: 'Mirror to Bitbucket'
 description: 'Mirrors the current branch to Bitbucket repository'
+#
+# NOTE: BITBUCKET_REPO is hardcoded in this action (search for "bf_dev/repo-name")
+#       Update all occurrences of "bf_dev/repo-name" to your actual Bitbucket repository path.
 
 inputs:
   bitbucket_username:
@@ -7,9 +10,6 @@ inputs:
     required: true
   bitbucket_api_token:
     description: 'Bitbucket API token/app token with repo write permissions'
-    required: true
-  bitbucket_repo:
-    description: 'Bitbucket repository path in owner/repo format'
     required: true
   bitbucket_user_email:
     description: 'Email for git config (can be a bot email)'
@@ -61,7 +61,7 @@ runs:
       env:
         BITBUCKET_USERNAME: ${{ inputs.bitbucket_username }}
         BITBUCKET_API_TOKEN: ${{ inputs.bitbucket_api_token }}
-        BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+        BITBUCKET_REPO: "bf_dev/repo-name"
       run: |
         # Disable credential helpers to prevent interactive prompts
         # This ensures Git uses our configured authentication instead of prompting
@@ -184,7 +184,7 @@ runs:
       env:
         BITBUCKET_USERNAME: ${{ inputs.bitbucket_username }}
         BITBUCKET_API_TOKEN: ${{ inputs.bitbucket_api_token }}
-        BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+        BITBUCKET_REPO: "bf_dev/repo-name"
         BRANCH_NAME: ${{ inputs.branch_name }}
         ACTION_TYPE: ${{ inputs.action_type }}
         COMMIT_SHA: ${{ github.sha }}
