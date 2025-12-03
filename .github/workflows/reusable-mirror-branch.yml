@@ -82,6 +82,9 @@ on:
       push_occurred:
         description: 'Whether a push actually occurred'
         value: ${{ jobs.mirror.outputs.push_occurred }}
+      bitbucket_commit_sha:
+        description: 'The commit SHA that was pushed to Bitbucket'
+        value: ${{ jobs.mirror.outputs.bitbucket_commit_sha }}
       pipeline_result:
         description: 'Final result of the Bitbucket pipeline'
         value: ${{ jobs.mirror.outputs.pipeline_result }}
@@ -95,6 +98,7 @@ jobs:
     outputs:
       branch_pushed: ${{ steps.mirror.outputs.branch_pushed }}
       push_occurred: ${{ steps.mirror.outputs.push_occurred }}
+      bitbucket_commit_sha: ${{ steps.mirror.outputs.bitbucket_commit_sha }}
       pipeline_result: ${{ steps.wait-pipeline.outputs.pipeline_result }}
       pipeline_url: ${{ steps.wait-pipeline.outputs.pipeline_url }}
 
