@@ -5,17 +5,19 @@ Reusable GitHub Actions and workflows for mirroring repositories to Bitbucket.
 ## Features
 
 - **Mirror branches** from GitHub to Bitbucket
+- **Mirror tags** from GitHub to Bitbucket (e.g., `v*` semantic version tags)
 - **Delete branches** on Bitbucket when PRs are closed
 - **Wait for Bitbucket pipelines** to complete and report status
 - **Trigger pipelines** via API when commits already exist
 
 ## Reusable Workflows
 
-This repository provides two purpose-specific reusable workflows:
+This repository provides three purpose-specific reusable workflows:
 
 | Workflow | Purpose | When to Use |
 |----------|---------|-------------|
 | `reusable-mirror-branch.yml` | Mirror a branch to Bitbucket | Push events, PR opened/synchronized |
+| `reusable-mirror-tag.yml` | Mirror a tag to Bitbucket | Tag push events (e.g., `v*`) |
 | `reusable-delete-branch.yml` | Delete a branch from Bitbucket | PR closed (merged or not) |
 
 ## Quick Start
@@ -30,27 +32,41 @@ name: Mirror to Bitbucket
 
 on:
   # Mirror default branch (main/master) when commits are pushed
+  # Mirror semantic version tags (v*) when pushed
   push:
     branches: [main, master]
+    tags: ['v*']
   # Handle PR events: mirror PR branch, cleanup on close/merge
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches: [main, master]
 
 jobs:
-  # Job 1: Mirror branch on push or PR open/sync
-  mirror:
-    if: github.event_name == 'push' || github.event.action != 'closed'
+  # Job 1: Mirror branch on push (not tags) or PR open/sync
+  mirror-branch:
+    if: (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event.action != 'closed'
     uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-mirror-branch.yml@main
     with:
       branch_name: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
     secrets:
       BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
       BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-      BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
       BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
 
-  # Job 2: Delete PR branch on close (merged or not)
+  # Job 2: Mirror tag on push (only tags)
+  mirror-tag:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-mirror-tag.yml@main
+    with:
+      tag_name: ${{ github.ref_name }}
+      bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
+    secrets:
+      BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+      BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+      BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
+
+  # Job 3: Delete PR branch on close (merged or not)
   cleanup:
     if: github.event.action == 'closed'
     uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-delete-branch.yml@main
@@ -67,6 +83,7 @@ jobs:
 | GitHub Event | Workflow Called | Result on Bitbucket |
 |--------------|-----------------|---------------------|
 | Push to main/master | `reusable-mirror-branch.yml` | Mirrors default branch |
+| Push tag (v*) | `reusable-mirror-tag.yml` | Mirrors tag |
 | PR opened/synchronized | `reusable-mirror-branch.yml` | Mirrors PR branch |
 | PR closed (not merged) | `reusable-delete-branch.yml` | Deletes PR branch |
 | PR merged | `reusable-delete-branch.yml` | Deletes PR branch (main mirrored via push event) |
@@ -159,6 +176,29 @@ Deletes a branch from Bitbucket (for PR cleanup).
 |--------|-------------|
 | `branch_deleted` | Whether the branch was actually deleted |
 
+### `reusable-mirror-tag.yml`
+
+Mirrors a tag from GitHub to Bitbucket, optionally waits for pipeline.
+
+**Inputs:**
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `tag_name` | Yes | - | Tag name to mirror (e.g., `v1.0.0`) |
+| `wait_for_pipeline` | No | `true` | Wait for Bitbucket pipeline to complete |
+| `poll_interval` | No | `30` | Seconds between pipeline status checks |
+| `max_attempts` | No | `60` | Max polling attempts before timeout |
+
+**Outputs:**
+
+| Output | Description |
+|--------|-------------|
+| `tag_pushed` | The tag name that was pushed |
+| `push_occurred` | Whether a push actually occurred (false if tag already exists) |
+| `bitbucket_commit_sha` | The commit SHA that the tag points to |
+| `pipeline_result` | Final result of the Bitbucket pipeline |
+| `pipeline_url` | URL to view the pipeline in Bitbucket |
+
 ## Actions Reference
 
 ### `mirror-to-bitbucket`
@@ -230,11 +270,11 @@ pnpm build
 
 This creates the `dist/` folders needed by the composite actions.
 
-## Complete Example: PR Mirroring Workflow
+## Complete Example: Full Mirroring Workflow
 
 ### Using Split Reusable Workflows (Recommended)
 
-This example handles all PR scenarios using the split workflows:
+This example handles branches, tags, and PR scenarios using the split workflows:
 
 ```yaml
 # .github/workflows/mirror.yml
@@ -242,25 +282,40 @@ name: Mirror to Bitbucket
 
 on:
   # Mirror default branch when commits are pushed (including merge commits)
+  # Mirror semantic version tags when pushed
   push:
     branches: [main, master]
+    tags: ['v*']
   # Handle PR lifecycle events
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches: [main, master]
 
 jobs:
-  # Mirror branch on push events or PR open/sync
-  mirror:
-    if: github.event_name == 'push' || github.event.action != 'closed'
+  # Mirror branch on push events (not tags) or PR open/sync
+  mirror-branch:
+    if: (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event.action != 'closed'
     uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-mirror-branch.yml@main
     with:
       branch_name: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
       wait_for_pipeline: true
     secrets:
       BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
       BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-      BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+      BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
+
+  # Mirror tag on push events (only tags)
+  mirror-tag:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-mirror-tag.yml@main
+    with:
+      tag_name: ${{ github.ref_name }}
+      bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
+      wait_for_pipeline: true
+    secrets:
+      BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+      BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
       BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
 
   # Delete PR branch on close (merged or not)
@@ -280,8 +335,12 @@ jobs:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           PR LIFECYCLE EVENTS                               │
+│                           MIRRORING EVENTS                                  │
 ├─────────────────────────┬───────────────────────────────────────────────────┤
+│ Push to main/master     │ → reusable-mirror-branch.yml → Mirror branch     │
+├─────────────────────────┼───────────────────────────────────────────────────┤
+│ Push tag (v*)           │ → reusable-mirror-tag.yml → Mirror tag           │
+├─────────────────────────┼───────────────────────────────────────────────────┤
 │ PR opened/synchronized  │ → reusable-mirror-branch.yml → Mirror PR branch  │
 ├─────────────────────────┼───────────────────────────────────────────────────┤
 │ PR closed (not merged)  │ → reusable-delete-branch.yml → Delete PR branch  │

@@ -54,45 +54,60 @@ This document describes the requirements and behavior for mirroring GitHub repos
 
 ---
 
+### 4. Tag Pushed
+
+**Trigger:** `push` event with `refs/tags/*` (typically filtered to `v*` for semantic versions)
+
+**Action:** Mirror the tag to Bitbucket
+
+**Workflow:** `reusable-mirror-tag.yml`
+
+**Details:**
+- When a tag is pushed to GitHub (e.g., `v1.0.0`), it should be mirrored to Bitbucket
+- Tags are immutable, so no force push is used
+- If the tag already exists on Bitbucket, the push is skipped
+- Optionally waits for Bitbucket pipeline to complete (useful for release pipelines)
+
+---
+
 ## Event Flow Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              GITHUB EVENTS                                      │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                      │
-          ┌───────────────────────────┼───────────────────────────┐
-          │                           │                           │
-          ▼                           ▼                           ▼
-┌─────────────────────┐   ┌─────────────────────┐   ┌─────────────────────┐
-│  push to main/      │   │  pull_request       │   │  pull_request       │
-│  master             │   │  opened/synchronize │   │  closed             │
-└─────────────────────┘   └─────────────────────┘   └─────────────────────┘
-          │                           │                           │
-          │                           │               ┌───────────┴───────────┐
-          │                           │               │                       │
-          ▼                           ▼               ▼                       ▼
-┌─────────────────────┐   ┌─────────────────────┐   ┌───────────┐   ┌───────────┐
-│ reusable-mirror-    │   │ reusable-mirror-    │   │  merged   │   │   not     │
-│ branch.yml          │   │ branch.yml          │   │           │   │  merged   │
-└─────────────────────┘   └─────────────────────┘   └───────────┘   └───────────┘
-          │                           │                   │               │
-          ▼                           ▼                   │               │
-┌─────────────────────┐   ┌─────────────────────┐        │               │
-│ Mirror default      │   │ Mirror PR branch    │        │               │
-│ branch to Bitbucket │   │ to Bitbucket        │        │               │
-└─────────────────────┘   └─────────────────────┘        │               │
-                                                          │               │
-                                                          ▼               ▼
-                                              ┌─────────────────────────────────┐
-                                              │   reusable-delete-branch.yml    │
-                                              └─────────────────────────────────┘
-                                                          │
-                                                          ▼
-                                              ┌─────────────────────────────────┐
-                                              │   Delete PR branch from         │
-                                              │   Bitbucket (cleanup)           │
-                                              └─────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                      GITHUB EVENTS                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+                                              │
+      ┌───────────────────┬───────────────────┼───────────────────┬───────────────────┐
+      │                   │                   │                   │                   │
+      ▼                   ▼                   ▼                   ▼                   ▼
+┌───────────────┐ ┌───────────────┐ ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
+│ push to main/ │ │ push tag      │ │ pull_request  │ │ pull_request  │ │ pull_request  │
+│ master        │ │ (v*)          │ │ opened/sync   │ │ reopened      │ │ closed        │
+└───────────────┘ └───────────────┘ └───────────────┘ └───────────────┘ └───────────────┘
+      │                   │                   │               │               │
+      ▼                   ▼                   ▼               │     ┌─────────┴─────────┐
+┌───────────────┐ ┌───────────────┐ ┌───────────────┐        │     │                   │
+│ reusable-     │ │ reusable-     │ │ reusable-     │        │     ▼                   ▼
+│ mirror-       │ │ mirror-       │ │ mirror-       │        │ ┌───────────┐   ┌───────────┐
+│ branch.yml    │ │ tag.yml       │ │ branch.yml    │        │ │  merged   │   │   not     │
+└───────────────┘ └───────────────┘ └───────────────┘        │ │           │   │  merged   │
+      │                   │                   │               │ └───────────┘   └───────────┘
+      ▼                   ▼                   ▼               │       │               │
+┌───────────────┐ ┌───────────────┐ ┌───────────────┐        │       │               │
+│ Mirror default│ │ Mirror tag    │ │ Mirror PR     │        │       │               │
+│ branch to BB  │ │ to Bitbucket  │ │ branch to BB  │        │       ▼               ▼
+└───────────────┘ └───────────────┘ └───────────────┘        │ ┌─────────────────────────┐
+                                                              │ │ reusable-delete-        │
+                                                              │ │ branch.yml              │
+                                                              │ └─────────────────────────┘
+                                                              │           │
+                                                              │           ▼
+                                                              │ ┌─────────────────────────┐
+                                                              │ │ Delete PR branch from   │
+                                                              │ │ Bitbucket (cleanup)     │
+                                                              │ └─────────────────────────┘
+                                                              │
+                                                              └──► (mirror main via push event)
 ```
 
 ---
@@ -137,6 +152,7 @@ When a PR is merged, two GitHub events are triggered:
 | GitHub Event | Condition | Workflow | Action on Bitbucket |
 |--------------|-----------|----------|---------------------|
 | `push` | Branch is main/master | `reusable-mirror-branch.yml` | Mirror default branch |
+| `push` | Tag matches `v*` | `reusable-mirror-tag.yml` | Mirror tag |
 | `pull_request.opened` | Target is main/master | `reusable-mirror-branch.yml` | Mirror PR branch |
 | `pull_request.synchronize` | Target is main/master | `reusable-mirror-branch.yml` | Update PR branch |
 | `pull_request.reopened` | Target is main/master | `reusable-mirror-branch.yml` | Mirror PR branch |
@@ -163,6 +179,15 @@ When a PR is merged, two GitHub events are triggered:
 | `branch_name` | Yes | - | Branch name to delete |
 | `allow_deletion` | No | `true` | If false, skip deletion |
 
+### `reusable-mirror-tag.yml`
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `tag_name` | Yes | - | Tag name to mirror (e.g., `v1.0.0`) |
+| `wait_for_pipeline` | No | `true` | Wait for Bitbucket pipeline to complete |
+| `poll_interval` | No | `30` | Seconds between pipeline status checks |
+| `max_attempts` | No | `60` | Max polling attempts before timeout |
+
 ---
 
 ## Example Caller Workflow
@@ -173,21 +198,34 @@ name: Mirror to Bitbucket
 on:
   push:
     branches: [main, master]
+    tags: ['v*']  # Semantic version tags
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches: [main, master]
 
 jobs:
-  # Mirror branch on push or PR open/sync
-  mirror:
-    if: github.event_name == 'push' || github.event.action != 'closed'
+  # Mirror branch on push (not tags) or PR open/sync
+  mirror-branch:
+    if: (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event.action != 'closed'
     uses: <owner>/mirror-workflows/.github/workflows/reusable-mirror-branch.yml@main
     with:
       branch_name: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
     secrets:
       BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
       BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-      BITBUCKET_REPO: ${{ secrets.BITBUCKET_REPO }}
+      BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
+
+  # Mirror tag on push (only tags)
+  mirror-tag:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    uses: <owner>/mirror-workflows/.github/workflows/reusable-mirror-tag.yml@main
+    with:
+      tag_name: ${{ github.ref_name }}
+      bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
+    secrets:
+      BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+      BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
       BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
 
   # Delete PR branch on close (merged or not)

@@ -1,0 +1,306 @@
+# Reusable workflow for mirroring a GitHub tag to Bitbucket
+#
+# This workflow mirrors a tag from GitHub to Bitbucket and optionally
+# waits for the Bitbucket pipeline to complete.
+#
+# Usage:
+#   uses: <owner>/mirror-workflows/.github/workflows/reusable-mirror-tag.yml@main
+#
+# Common scenario:
+#   Mirror semantic version tags (v*) when pushed to GitHub
+#
+# Example caller workflow:
+#   on:
+#     push:
+#       tags: ['v*']
+#
+#   jobs:
+#     mirror-tag:
+#       if: startsWith(github.ref, 'refs/tags/')
+#       uses: <owner>/mirror-workflows/.github/workflows/reusable-mirror-tag.yml@main
+#       with:
+#         tag_name: ${{ github.ref_name }}
+#         bitbucket_repo: "workspace/repo-name"
+#       secrets:
+#         BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+#         BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+#         BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
+#
+name: Reusable Mirror Tag to Bitbucket
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Tag name to mirror to Bitbucket (e.g., v1.0.0)'
+        required: true
+        type: string
+      wait_for_pipeline:
+        description: 'If true, wait for Bitbucket pipeline to complete'
+        required: false
+        type: boolean
+        default: true
+      poll_interval:
+        description: 'Seconds between pipeline polling attempts'
+        required: false
+        type: number
+        default: 30
+      max_attempts:
+        description: 'Maximum polling attempts before timeout'
+        required: false
+        type: number
+        default: 60
+      bitbucket_repo:
+        description: 'Bitbucket repository path in owner/repo format'
+        required: true
+        type: string
+    secrets:
+      BITBUCKET_USERNAME:
+        description: 'Bitbucket username or x-token-auth'
+        required: true
+      BITBUCKET_API_TOKEN:
+        description: 'Bitbucket API token with repo write permissions'
+        required: true
+      BITBUCKET_USER_EMAIL:
+        description: 'Email for git config'
+        required: true
+    outputs:
+      tag_pushed:
+        description: 'The tag name that was pushed to Bitbucket'
+        value: ${{ jobs.mirror-tag.outputs.tag_pushed }}
+      push_occurred:
+        description: 'Whether a push actually occurred (false if tag already exists)'
+        value: ${{ jobs.mirror-tag.outputs.push_occurred }}
+      bitbucket_commit_sha:
+        description: 'The commit SHA that the tag points to'
+        value: ${{ jobs.mirror-tag.outputs.bitbucket_commit_sha }}
+      pipeline_result:
+        description: 'Final result of the Bitbucket pipeline'
+        value: ${{ jobs.mirror-tag.outputs.pipeline_result }}
+      pipeline_url:
+        description: 'URL to view the pipeline in Bitbucket'
+        value: ${{ jobs.mirror-tag.outputs.pipeline_url }}
+
+jobs:
+  mirror-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_pushed: ${{ steps.mirror.outputs.tag_pushed }}
+      push_occurred: ${{ steps.mirror.outputs.push_occurred }}
+      bitbucket_commit_sha: ${{ steps.mirror.outputs.bitbucket_commit_sha }}
+      pipeline_result: ${{ steps.wait-pipeline.outputs.pipeline_result }}
+      pipeline_url: ${{ steps.wait-pipeline.outputs.pipeline_url }}
+
+    steps:
+      # Step 1: Checkout the calling repository at the tag
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag_name }}
+          fetch-depth: 0
+
+      # Step 2: Set up Git identity for commits
+      - name: Set up Git identity
+        env:
+          BITBUCKET_USER_EMAIL: ${{ secrets.BITBUCKET_USER_EMAIL }}
+        run: |
+          git config --global user.name "GitHub Actions Bot - Mirror"
+          git config --global user.email "${BITBUCKET_USER_EMAIL}"
+
+      # Step 3: Configure Bitbucket remote with authentication
+      - name: Configure Bitbucket Remote
+        env:
+          BITBUCKET_USERNAME: ${{ secrets.BITBUCKET_USERNAME }}
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+        run: |
+          # Disable credential helpers to prevent interactive prompts
+          git config --local credential.helper ""
+          git config --global credential.helper ""
+          
+          # Disable GIT_ASKPASS to prevent interactive credential prompts
+          export GIT_ASKPASS=""
+          export SSH_ASKPASS=""
+          
+          # Create Base64 encoded credentials for http.extraHeader (backup method)
+          AUTH=$(echo -n "${BITBUCKET_USERNAME}:${BITBUCKET_API_TOKEN}" | base64 -w 0)
+          
+          # Configure http.extraHeader as a backup authentication method
+          git config --local http.https://bitbucket.org/.extraHeader "Authorization: Basic ${AUTH}"
+          
+          # Remove any existing bitbucket remote first
+          git remote remove bitbucket 2>/dev/null || true
+          
+          # Add remote with credentials embedded in URL (most reliable for automation)
+          git remote add bitbucket "https://${BITBUCKET_USERNAME}:${BITBUCKET_API_TOKEN}@bitbucket.org/${BITBUCKET_REPO}.git"
+          
+          # Validate remote was added
+          echo "Validating Bitbucket remote..."
+          git remote get-url bitbucket
+
+      # Step 4: Push tag to Bitbucket (no force - tags are immutable)
+      - name: Mirror Tag to Bitbucket
+        id: mirror
+        env:
+          TAG_NAME: ${{ inputs.tag_name }}
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+        run: |
+          # Get the commit SHA that the tag points to
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          
+          # Check if bitbucket-pipelines.yml exists in the repo
+          if [ -f "bitbucket-pipelines.yml" ]; then
+            echo "pipelines_configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "pipelines_configured=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check if tag already exists on Bitbucket
+          if git ls-remote --tags bitbucket "refs/tags/${TAG_NAME}" | grep -q .; then
+            echo "⚠️ Tag '${TAG_NAME}' already exists on Bitbucket, skipping push"
+            echo "push_occurred=false" >> $GITHUB_OUTPUT
+            echo "tag_pushed=${TAG_NAME}" >> $GITHUB_OUTPUT
+            echo "bitbucket_commit_sha=${CURRENT_COMMIT}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Log the push operation
+          echo "Pushing tag '${TAG_NAME}' to Bitbucket..."
+          echo "Tag points to commit: ${CURRENT_COMMIT}"
+          
+          # Push the tag (no --force since tags are immutable)
+          if output=$(git push bitbucket "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}" 2>&1); then
+            echo "$output"
+            echo "✅ Tag '${TAG_NAME}' pushed to Bitbucket"
+            echo "push_occurred=true" >> $GITHUB_OUTPUT
+            echo "tag_pushed=${TAG_NAME}" >> $GITHUB_OUTPUT
+            echo "bitbucket_commit_sha=${CURRENT_COMMIT}" >> $GITHUB_OUTPUT
+          else
+            echo "$output"
+            echo "❌ Failed to push tag '${TAG_NAME}' to Bitbucket."
+            
+            # Provide helpful error message for permission issues
+            if echo "$output" | grep -q "pre-receive hook declined"; then
+              echo "::error::⛔ PERMISSION DENIED: Bitbucket branch/tag protection blocked the push."
+              echo "👉 SOLUTION: Check Bitbucket Settings > Branch permissions for tag restrictions."
+            else
+              echo "=== Bitbucket Push Error ==="
+              echo "Tag: ${TAG_NAME}"
+              echo "Commit: ${CURRENT_COMMIT}"
+              echo "::error::Push failed. See logs above."
+            fi
+            exit 1
+          fi
+
+      # Step 5: Wait for Bitbucket Pipeline to complete (if configured)
+      - name: Wait for Bitbucket Pipeline
+        if: inputs.wait_for_pipeline && steps.mirror.outputs.pipelines_configured == 'true' && steps.mirror.outputs.push_occurred == 'true'
+        id: wait-pipeline
+        env:
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+          COMMIT_SHA: ${{ steps.mirror.outputs.bitbucket_commit_sha }}
+          TAG_NAME: ${{ inputs.tag_name }}
+          POLL_INTERVAL: ${{ inputs.poll_interval }}
+          MAX_ATTEMPTS: ${{ inputs.max_attempts }}
+        run: |
+          WORKSPACE=$(echo "$BITBUCKET_REPO" | cut -d'/' -f1)
+          REPO_SLUG=$(echo "$BITBUCKET_REPO" | cut -d'/' -f2)
+          
+          ATTEMPT=0
+          FOUND_UUID=""
+          
+          echo "Waiting for Bitbucket pipeline for tag '${TAG_NAME}' (commit: ${COMMIT_SHA})..."
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            
+            # Fetch pipelines for this commit (tag pipelines are triggered by commit)
+            RESPONSE=$(curl -s \
+              "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_SLUG}/pipelines/?pagelen=50&sort=-created_on&target.commit.hash=${COMMIT_SHA}" \
+              -H "Authorization: Bearer ${BITBUCKET_API_TOKEN}" \
+              -H "Accept: application/json")
+            
+            # Get the most recent pipeline for this commit
+            PIPELINE=$(echo "$RESPONSE" | jq -r '.values[0] | @json' 2>/dev/null)
+            
+            if [ -n "$PIPELINE" ] && [ "$PIPELINE" != "null" ]; then
+              UUID=$(echo "$PIPELINE" | jq -r '.uuid' | tr -d '{}')
+              STATE=$(echo "$PIPELINE" | jq -r '.state.name // empty')
+              RESULT=$(echo "$PIPELINE" | jq -r '.state.result.name // empty')
+              FOUND_UUID="$UUID"
+              
+              PIPELINE_URL="https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/${UUID}"
+              
+              # Output pipeline info
+              echo "pipeline_uuid=${UUID}" >> $GITHUB_OUTPUT
+              echo "pipeline_state=${STATE}" >> $GITHUB_OUTPUT
+              echo "pipeline_result=${RESULT}" >> $GITHUB_OUTPUT
+              echo "pipeline_url=${PIPELINE_URL}" >> $GITHUB_OUTPUT
+              
+              echo "[Attempt ${ATTEMPT}/${MAX_ATTEMPTS}] Pipeline ${UUID}: State=${STATE}, Result=${RESULT}"
+              
+              # Check if pipeline completed
+              if [ "$STATE" = "COMPLETED" ]; then
+                if [ "$RESULT" = "SUCCESSFUL" ]; then
+                  echo "✅ Bitbucket pipeline succeeded"
+                  exit 0
+                else
+                  echo "❌ Bitbucket pipeline failed: ${RESULT}"
+                  echo "error_message=Pipeline failed with result: ${RESULT}. View: ${PIPELINE_URL}" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
+              fi
+            else
+              echo "[Attempt ${ATTEMPT}/${MAX_ATTEMPTS}] No pipeline found yet for commit ${COMMIT_SHA}..."
+            fi
+            
+            # Wait before next poll
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              sleep $POLL_INTERVAL
+            fi
+          done
+          
+          # Timeout reached
+          echo "❌ Timed out waiting for Bitbucket pipeline"
+          if [ -n "$FOUND_UUID" ]; then
+            echo "pipeline_url=https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/${FOUND_UUID}" >> $GITHUB_OUTPUT
+          fi
+          exit 1
+
+      # Step 6: Summarize results (always runs)
+      - name: Summarize Bitbucket pipeline result
+        if: always()
+        env:
+          TAG_NAME: ${{ inputs.tag_name }}
+          PUSH_OCCURRED: ${{ steps.mirror.outputs.push_occurred }}
+          BB_PIPELINE_URL: ${{ steps.wait-pipeline.outputs.pipeline_url }}
+          BB_PIPELINE_STATE: ${{ steps.wait-pipeline.outputs.pipeline_state }}
+          BB_PIPELINE_RESULT: ${{ steps.wait-pipeline.outputs.pipeline_result }}
+          BB_PIPELINE_ERROR: ${{ steps.wait-pipeline.outputs.error_message }}
+        run: |
+          echo "=== Bitbucket Tag Mirror Summary ==="
+          echo "Tag: ${TAG_NAME}"
+          echo "Push occurred: ${PUSH_OCCURRED}"
+          
+          if [ -n "$BB_PIPELINE_URL" ]; then
+            echo "Pipeline URL: $BB_PIPELINE_URL"
+          else
+            echo "Pipeline URL: (not available)"
+          fi
+          
+          if [ -n "$BB_PIPELINE_STATE" ]; then
+            echo "Final state: $BB_PIPELINE_STATE"
+          fi
+          
+          if [ -n "$BB_PIPELINE_RESULT" ]; then
+            echo "Final result: $BB_PIPELINE_RESULT"
+          fi
+          
+          if [ -n "$BB_PIPELINE_ERROR" ]; then
+            echo ""
+            echo "Bitbucket pipeline error details:"
+            printf '%s\n' "$BB_PIPELINE_ERROR"
+          fi
+
