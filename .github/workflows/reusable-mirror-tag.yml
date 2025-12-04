@@ -208,6 +208,16 @@ jobs:
           WORKSPACE=$(echo "$BITBUCKET_REPO" | cut -d'/' -f1)
           REPO_SLUG=$(echo "$BITBUCKET_REPO" | cut -d'/' -f2)
           
+          # Helper function to construct pipeline URL (reuses logic from setup-pipeline-url action)
+          # This matches the logic in .github/actions/setup-pipeline-url/action.yml
+          setup_pipeline_url() {
+            local workspace="$1"
+            local repo_slug="$2"
+            local uuid="$3"
+            local clean_uuid=$(echo "${uuid}" | tr -d '{}')
+            echo "https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/${clean_uuid}"
+          }
+          
           ATTEMPT=0
           FOUND_UUID=""
           
@@ -231,7 +241,8 @@ jobs:
               RESULT=$(echo "$PIPELINE" | jq -r '.state.result.name // empty')
               FOUND_UUID="$UUID"
               
-              PIPELINE_URL="https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/${UUID}"
+              # Construct pipeline URL using reusable helper function
+              PIPELINE_URL=$(setup_pipeline_url "${WORKSPACE}" "${REPO_SLUG}" "${UUID}")
               
               # Output pipeline info
               echo "pipeline_uuid=${UUID}" >> $GITHUB_OUTPUT
@@ -265,7 +276,9 @@ jobs:
           # Timeout reached
           echo "❌ Timed out waiting for Bitbucket pipeline"
           if [ -n "$FOUND_UUID" ]; then
-            echo "pipeline_url=https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/${FOUND_UUID}" >> $GITHUB_OUTPUT
+            # Construct pipeline URL using reusable helper function
+            TIMEOUT_PIPELINE_URL=$(setup_pipeline_url "${WORKSPACE}" "${REPO_SLUG}" "${FOUND_UUID}")
+            echo "pipeline_url=${TIMEOUT_PIPELINE_URL}" >> $GITHUB_OUTPUT
           fi
           exit 1
 
@@ -303,4 +316,6 @@ jobs:
             echo "Bitbucket pipeline error details:"
             printf '%s\n' "$BB_PIPELINE_ERROR"
           fi
+
+
 
