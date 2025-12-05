@@ -215,7 +215,7 @@ jobs:
             local repo_slug="$2"
             local uuid="$3"
             local clean_uuid=$(echo "${uuid}" | tr -d '{}')
-            echo "https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/${clean_uuid}"
+            echo "https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/{${clean_uuid}}"
           }
           
           ATTEMPT=0
@@ -316,6 +316,3 @@ jobs:
             echo "Bitbucket pipeline error details:"
             printf '%s\n' "$BB_PIPELINE_ERROR"
           fi
-
-
-

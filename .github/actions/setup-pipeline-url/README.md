@@ -43,7 +43,7 @@ setup_pipeline_url() {
   local repo_slug="$2"
   local uuid="$3"
   local clean_uuid=$(echo "${uuid}" | tr -d '{}')
-  echo "https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/${clean_uuid}"
+  echo "https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/{${clean_uuid}}"
 }
 
 # Usage
@@ -76,4 +76,6 @@ https://bitbucket.org/{workspace}/{repo_slug}/addon/pipelines/home#!/results/{uu
 - The UUID can be provided with or without curly braces (e.g., `{123...}` or `123...`)
 - The action automatically removes curly braces if present
 - This action is used internally by the mirror workflows to ensure consistent URL construction
+
+
 
