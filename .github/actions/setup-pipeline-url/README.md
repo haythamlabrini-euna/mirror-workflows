@@ -76,3 +76,4 @@ https://bitbucket.org/{workspace}/{repo_slug}/addon/pipelines/home#!/results/{{u
 - The UUID can be provided with or without curly braces (e.g., `{123...}` or `123...`)
 - The action automatically removes curly braces if present
 - This action is used internally by the mirror workflows to ensure consistent URL construction
+
