@@ -326,6 +326,14 @@ jobs:
           ATTEMPT=0
           FOUND_UUID=""
           
+          # Echo pipeline URL early so the team can check on it right away
+          if [ -n "$EXPECTED_PIPELINE_UUID" ]; then
+            EARLY_PIPELINE_URL=$(setup_pipeline_url "${WORKSPACE}" "${REPO_SLUG}" "${EXPECTED_PIPELINE_UUID}")
+            echo "🔗 Pipeline URL (check progress here): ${EARLY_PIPELINE_URL}"
+          else
+            echo "Waiting to find pipeline for commit ${COMMIT_SHA}..."
+          fi
+          
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
             
