@@ -26,6 +26,3 @@ PIPELINE_URL="https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/ho
 
 # Output the URL (can be captured with command substitution)
 echo "${PIPELINE_URL}"
-
-
-

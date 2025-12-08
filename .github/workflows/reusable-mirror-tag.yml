@@ -217,7 +217,7 @@ jobs:
             local clean_uuid=$(echo "${uuid}" | tr -d '{}')
             echo "https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/{${clean_uuid}}"
           }
-          
+              
           ATTEMPT=0
           FOUND_UUID=""
           

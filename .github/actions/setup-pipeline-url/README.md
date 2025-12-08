@@ -68,7 +68,7 @@ URL=$(setup_pipeline_url "workspace" "repo" "uuid")
 
 The constructed URL follows this format:
 ```
-https://bitbucket.org/{workspace}/{repo_slug}/addon/pipelines/home#!/results/{uuid}
+https://bitbucket.org/{workspace}/{repo_slug}/addon/pipelines/home#!/results/{{uuid}}
 ```
 
 ## Notes
@@ -76,6 +76,3 @@ https://bitbucket.org/{workspace}/{repo_slug}/addon/pipelines/home#!/results/{uu
 - The UUID can be provided with or without curly braces (e.g., `{123...}` or `123...`)
 - The action automatically removes curly braces if present
 - This action is used internally by the mirror workflows to ensure consistent URL construction
-
-
-
