@@ -64,12 +64,87 @@ jobs:
     steps:
       - name: Trigger Bitbucket custom pipeline
         id: trigger
-        uses: ./.github/actions/trigger-custom-pipeline
-        with:
-          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
-          bitbucket_repo: ${{ inputs.bitbucket_repo }}
-          pipeline_name: ${{ inputs.pipeline_name }}
-          branch_name: ${{ inputs.branch_name }}
+        env:
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+          PIPELINE_NAME: ${{ inputs.pipeline_name }}
+          BRANCH_NAME: ${{ inputs.branch_name }}
+        run: |
+          set -e
+          
+          # Validate required inputs
+          if [ -z "$BITBUCKET_API_TOKEN" ] || [ -z "$BITBUCKET_REPO" ] || [ -z "$PIPELINE_NAME" ]; then
+            echo "❌ Missing required inputs: BITBUCKET_API_TOKEN, BITBUCKET_REPO, or PIPELINE_NAME"
+            exit 1
+          fi
+          
+          # Parse workspace and repo slug from BITBUCKET_REPO
+          IFS='/' read -r workspace repo_slug <<< "$BITBUCKET_REPO"
+          if [ -z "$workspace" ] || [ -z "$repo_slug" ]; then
+            echo "❌ BITBUCKET_REPO must be in the format 'workspace/repo-slug'"
+            exit 1
+          fi
+          
+          # Set default branch if not provided
+          branch_name="${BRANCH_NAME:-main}"
+          
+          echo "Triggering Bitbucket custom pipeline '$PIPELINE_NAME' on branch '$branch_name'"
+          
+          # Build payload for Bitbucket API
+          # Custom selector runs the named pipeline under pipelines.custom
+          payload=$(jq -n \
+            --arg ref_name "$branch_name" \
+            --arg pattern "$PIPELINE_NAME" \
+            '{
+              target: {
+                type: "pipeline_ref_target",
+                ref_type: "branch",
+                ref_name: $ref_name,
+                selector: {
+                  type: "custom",
+                  pattern: $pattern
+                }
+              }
+            }')
+          
+          # Call Bitbucket Pipelines REST API to start the custom pipeline
+          response=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $BITBUCKET_API_TOKEN" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "https://api.bitbucket.org/2.0/repositories/${workspace}/${repo_slug}/pipelines/")
+          
+          # Extract HTTP status code and response body
+          http_code=$(echo "$response" | tail -n1)
+          response_body=$(echo "$response" | sed '$d')
+          
+          # Check if request was successful
+          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            # Extract UUID from response (remove curly braces if present)
+            uuid=$(echo "$response_body" | jq -r '.uuid // empty' | tr -d '{}')
+            
+            if [ -n "$uuid" ] && [ "$uuid" != "null" ]; then
+              pipeline_url="https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/${uuid}"
+              
+              echo "✅ Custom pipeline triggered (UUID: $uuid)"
+              echo "🔗 Pipeline URL: $pipeline_url"
+              
+              # Set GitHub Actions outputs
+              echo "triggered_pipeline_uuid=$uuid" >> "$GITHUB_OUTPUT"
+              echo "pipeline_url=$pipeline_url" >> "$GITHUB_OUTPUT"
+            else
+              echo "❌ Failed to extract pipeline UUID from response"
+              echo "Response: $response_body"
+              exit 1
+            fi
+          else
+            # Surface Bitbucket error details to help with debugging permission or naming issues
+            echo "❌ Failed to trigger Bitbucket custom pipeline (HTTP $http_code)"
+            echo "$response_body" | jq '.' 2>/dev/null || echo "$response_body"
+            exit 1
+          fi
 
       - name: Summarize pipeline trigger
         if: always()
