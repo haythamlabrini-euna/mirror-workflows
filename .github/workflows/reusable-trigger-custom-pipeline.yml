@@ -91,13 +91,43 @@ jobs:
           pipeline_name: ${{ inputs.pipeline_name }}
           branch_name: ${{ inputs.branch_name }}
 
+      # Get the branch HEAD commit from Bitbucket to wait for the correct pipeline
+      # This ensures we wait for the pipeline running on the branch's current commit,
+      # not the workflow run's commit SHA
+      - name: Get Bitbucket branch HEAD commit
+        if: inputs.wait_for_pipeline
+        id: get-commit
+        env:
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+          BRANCH_NAME: ${{ inputs.branch_name }}
+        run: |
+          WORKSPACE=$(echo "$BITBUCKET_REPO" | cut -d'/' -f1)
+          REPO_SLUG=$(echo "$BITBUCKET_REPO" | cut -d'/' -f2)
+          
+          # Fetch branch information from Bitbucket API
+          RESPONSE=$(curl -s \
+            "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_SLUG}/refs/branches/${BRANCH_NAME}" \
+            -H "Authorization: Bearer ${BITBUCKET_API_TOKEN}" \
+            -H "Accept: application/json")
+          
+          COMMIT_SHA=$(echo "$RESPONSE" | jq -r '.target.hash // empty' 2>/dev/null)
+          
+          if [ -z "$COMMIT_SHA" ] || [ "$COMMIT_SHA" = "null" ]; then
+            echo "⚠️ Could not fetch branch HEAD from Bitbucket, using workflow commit SHA"
+            echo "commit_sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Found branch HEAD commit: ${COMMIT_SHA}"
+            echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Wait for Bitbucket pipeline
         if: inputs.wait_for_pipeline
         id: wait-pipeline
         uses: ./.github/actions/wait-for-bitbucket-pipeline
         with:
           bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
-          commit_sha: ${{ github.sha }}
+          commit_sha: ${{ steps.get-commit.outputs.commit_sha }}
           poll_interval: ${{ inputs.poll_interval }}
           max_attempts: ${{ inputs.max_attempts }}
           expected_pipeline_uuid: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
