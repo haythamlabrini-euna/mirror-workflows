@@ -1,0 +1,122 @@
+# Reusable workflow for triggering a Bitbucket custom pipeline (e.g., contract-test, e2e-bootstrap)
+#
+# Usage:
+#   uses: <owner>/mirror-workflows/.github/workflows/reusable-trigger-custom-pipeline.yml@main
+#
+# Example caller:
+#   on:
+#     workflow_dispatch:
+#       inputs:
+#         pipeline_name:
+#           description: 'Pipeline to trigger'
+#           required: true
+#           type: choice
+#           options:
+#             - contract-test
+#             - e2e-bootstrap
+#   jobs:
+#     trigger:
+#       uses: <owner>/mirror-workflows/.github/workflows/reusable-trigger-custom-pipeline.yml@main
+#       with:
+#         pipeline_name: ${{ github.event.inputs.pipeline_name }}
+#         branch_name: main
+#         bitbucket_repo: "workspace/repo-slug"
+#         wait_for_pipeline: true
+#       secrets:
+#         BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+
+name: Reusable Trigger Bitbucket Custom Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_name:
+        description: 'Custom pipeline name as defined under pipelines.custom in bitbucket-pipelines.yml'
+        required: true
+        type: string
+      branch_name:
+        description: 'Branch to target for the pipeline (defaults to main)'
+        required: false
+        type: string
+        default: 'main'
+      bitbucket_repo:
+        description: 'Bitbucket repository in workspace/repo-slug format'
+        required: true
+        type: string
+      wait_for_pipeline:
+        description: 'If true, poll Bitbucket until the pipeline finishes'
+        required: false
+        type: boolean
+        default: true
+      poll_interval:
+        description: 'Seconds between polling attempts when waiting'
+        required: false
+        type: number
+        default: 30
+      max_attempts:
+        description: 'Maximum polling attempts before timing out'
+        required: false
+        type: number
+        default: 60
+    secrets:
+      BITBUCKET_API_TOKEN:
+        description: 'Bitbucket API token/app password with pipeline trigger permission'
+        required: true
+    outputs:
+      pipeline_uuid:
+        description: 'UUID of the triggered pipeline'
+        value: ${{ jobs.trigger.outputs.pipeline_uuid }}
+      pipeline_url:
+        description: 'URL for the triggered pipeline'
+        value: ${{ jobs.trigger.outputs.pipeline_url }}
+      pipeline_result:
+        description: 'Final pipeline result when wait_for_pipeline=true'
+        value: ${{ jobs.trigger.outputs.pipeline_result }}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      pipeline_uuid: ${{ steps.wait-pipeline.outputs.pipeline_uuid || steps.trigger.outputs.triggered_pipeline_uuid }}
+      pipeline_url: ${{ steps.wait-pipeline.outputs.pipeline_url || steps.trigger.outputs.pipeline_url }}
+      pipeline_result: ${{ steps.wait-pipeline.outputs.pipeline_result }}
+
+    steps:
+      - name: Trigger Bitbucket custom pipeline
+        id: trigger
+        uses: ./.github/actions/trigger-custom-pipeline
+        with:
+          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+          bitbucket_repo: ${{ inputs.bitbucket_repo }}
+          pipeline_name: ${{ inputs.pipeline_name }}
+          branch_name: ${{ inputs.branch_name }}
+
+      - name: Wait for Bitbucket pipeline
+        if: inputs.wait_for_pipeline
+        id: wait-pipeline
+        uses: ./.github/actions/wait-for-bitbucket-pipeline
+        with:
+          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+          commit_sha: ${{ github.sha }}
+          poll_interval: ${{ inputs.poll_interval }}
+          max_attempts: ${{ inputs.max_attempts }}
+          expected_pipeline_uuid: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
+
+      - name: Summarize Bitbucket pipeline result
+        if: always()
+        env:
+          PIPELINE_URL: ${{ steps.wait-pipeline.outputs.pipeline_url || steps.trigger.outputs.pipeline_url }}
+          PIPELINE_RESULT: ${{ steps.wait-pipeline.outputs.pipeline_result }}
+        run: |
+          echo "=== Bitbucket Pipeline Summary ==="
+          if [ -n "$PIPELINE_URL" ]; then
+            echo "Pipeline URL: $PIPELINE_URL"
+          else
+            echo "Pipeline URL: (not available)"
+          fi
+          if [ -n "$PIPELINE_RESULT" ]; then
+            echo "Result: $PIPELINE_RESULT"
+          else
+            echo "Result: (not collected, wait_for_pipeline was false)"
+          fi
+

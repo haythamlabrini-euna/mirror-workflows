@@ -23,6 +23,11 @@ const actions = [
     name: 'wait-for-bitbucket-pipeline',
     input: '.github/actions/wait-for-bitbucket-pipeline/wait.ts',
     output: '.github/actions/wait-for-bitbucket-pipeline/dist/index.js'
+  },
+  {
+    name: 'trigger-custom-pipeline',
+    input: '.github/actions/trigger-custom-pipeline/trigger-custom-pipeline.ts',
+    output: '.github/actions/trigger-custom-pipeline/dist/index.js'
   }
 ];
 

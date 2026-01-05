@@ -1,0 +1,275 @@
+image:
+  name: 907859272778.dkr.ecr.us-east-2.amazonaws.com/bonfire/pipelines-helm:latest
+  aws:
+    oidc-role: arn:aws:iam::907859272778:role/bitbucket-ecr-bonfire-pipelines-helm
+
+definitions:
+  services:
+    docker:
+      memory: 7128 # https://levelup.gitconnected.com/solving-bitbucket-pipelines-memory-issues-62c5a236ef96
+    mysql:
+      image:
+        name: 907859272778.dkr.ecr.us-east-2.amazonaws.com/bonfire/pipelines-integration-test:v0.0.5
+        aws:
+          oidc-role: arn:aws:iam::907859272778:role/bitbucket-ecr-bonfire-pipelines-integration-test
+      variables:
+        MYSQL_DATABASE: "bonfire_test"
+        MYSQL_USER: "app"
+        MYSQL_PASSWORD: "Layla1" # the default db password should be fine to use, since that isn't really secret
+  steps:
+    - step: &unit-tests
+        name: unit-tests
+        image: node:22
+        script:
+          - cp .pipeline_templates/config.json.template app/config.json
+          - npm test
+    - step: &integration-tests-shard
+        oidc: true
+        image: node:22
+        size: 2x
+        services:
+          - mysql
+        # script is overridden by each step to pass the explicit shard ID
+    - step: &install
+        name: install dependencies
+        image: node:22
+        caches:
+          - node
+        script:
+          - cp .pipeline_templates/config.json.template app/config.json
+          - npm install
+        artifacts:
+          - node_modules/**
+    - step: &typecheck
+        name: typecheck
+        image: node:22
+        script:
+          - cp .pipeline_templates/config.json.template app/config.json
+          - npm run typecheck
+    - step: &lint
+        name: lint
+        image: node:22
+        script:
+          - cp .pipeline_templates/config.json.template app/config.json
+          # Temporary; people have put a truckload of "any" types, fix that, make it a hard error
+          - npm run lint -- --max-diagnostics 175
+    - step: &build-container-image
+        oidc: true
+        name: Build and push container image
+        size: 2x
+        script:
+          - DOCKER_BUILDKIT=0 make build bitbucket-push
+        services:
+          - docker
+    - step: &migration-notification
+        name: Migration Notification
+        image: python:3.12
+        script:
+          - pip install pystmark
+          - cd .pipeline_scripts
+          - python migration_notifier.py
+
+pipelines:
+  branches:
+    "{main}":
+      - step: *install
+      - parallel:
+          - step: *unit-tests
+          - step: *build-container-image
+      - step: &e2e-deploy
+          oidc: true
+          name: E2E Deploy
+          deployment: e2e
+          size: 4x
+          runtime:
+            cloud:
+              atlassian-ip-ranges: true
+          max-time: 10
+          script:
+            - make set-profile upgrade-secondary DEPLOYMENT_ENV=test SECONDARY_ENV=e2e RELEASE_NAME=e2e-api IMAGE_TAG=$(git log -1 --pretty=%H) NAMESPACE=e2e AWS_ROLE_ARN=arn:aws:iam::664686999905:role/bitbucket-deploy-helm-test TIMEOUT=5m
+      - step: &contract-test
+          oidc: true
+          name: Contract Test
+          image: node:22
+          deployment: contract-test
+          max-time: 10
+          script:
+            - cp .pipeline_templates/config.json.template app/config.json
+            - npm install
+            # Extending default timeout for pipeline tests; seeing random 2000+ms delay frequently without clear cause on random routes that are usually < 100ms
+            - npm run test-contract -- -m 3000
+      - parallel:
+          - step: &test-deploy
+              oidc: true
+              name: Test Deploy
+              deployment: test
+              size: 4x
+              runtime:
+                cloud:
+                  atlassian-ip-ranges: true
+              max-time: 10
+              script:
+                - make set-profile upgrade DEPLOYMENT_ENV=test RELEASE_NAME=alliterating-ostrich IMAGE_TAG=$(git log -1 --pretty=%H) AWS_ROLE_ARN=arn:aws:iam::664686999905:role/bitbucket-deploy-helm-test TIMEOUT=5m
+          - step: &test-2-deploy
+              oidc: true
+              name: Test 2 Deploy
+              deployment: test-2
+              size: 4x
+              runtime:
+                cloud:
+                  atlassian-ip-ranges: true
+              max-time: 10
+              script:
+                - make set-profile upgrade-secondary DEPLOYMENT_ENV=test SECONDARY_ENV=test-2 RELEASE_NAME=test-2-api IMAGE_TAG=$(git log -1 --pretty=%H) NAMESPACE=test-2 AWS_ROLE_ARN=arn:aws:iam::664686999905:role/bitbucket-deploy-helm-test TIMEOUT=5m
+      - step:
+          oidc: true
+          name: Staging Deploy
+          deployment: staging
+          size: 4x
+          runtime:
+            cloud:
+              atlassian-ip-ranges: true
+          max-time: 10
+          script:
+            - make set-profile set-context DEPLOYMENT_ENV=staging AWS_ROLE_ARN=arn:aws:iam::907859272778:role/bitbucket-deploy-helm-staging
+            - kubectl get pods -l "app=api-chart" -o jsonpath="{.items[*].spec.containers[*].image}" | tr ' ' '\n' | grep 'bonfire/api:' | cut -d':' -f 2 > .pipeline_scripts/commit_hash.txt
+            - make set-profile set-context upgrade DEPLOYMENT_ENV=staging RELEASE_NAME=staging-api IMAGE_TAG=$(git log -1 --pretty=%H) AWS_ROLE_ARN=arn:aws:iam::907859272778:role/bitbucket-deploy-helm-staging TIMEOUT=5m
+          artifacts:
+            - .pipeline_scripts/commit_hash.txt
+      - step: *migration-notification
+      - step:
+          name: Deploy Production
+          clone:
+            enabled: false
+          image:
+            name: alpine:latest
+          script:
+            - echo "Deploying to all production environments..."
+      - parallel:
+          - step:
+              oidc: true
+              name: EU Production
+              deployment: eu_production
+              size: 4x
+              runtime:
+                cloud:
+                  atlassian-ip-ranges: true
+              max-time: 15
+              script:
+                - make set-profile set-context upgrade DEPLOYMENT_ENV=eu RELEASE_NAME=eu-api IMAGE_TAG=$(git log -1 --pretty=%H) AWS_ROLE_ARN=arn:aws:iam::907859272778:role/bitbucket-deploy-helm-eu-production
+          - step:
+              oidc: true
+              name: CA Production
+              deployment: ca_production
+              size: 4x
+              runtime:
+                cloud:
+                  atlassian-ip-ranges: true
+              max-time: 15
+              script:
+                - make set-profile set-context upgrade DEPLOYMENT_ENV=ca RELEASE_NAME=ca-api IMAGE_TAG=$(git log -1 --pretty=%H) AWS_ROLE_ARN=arn:aws:iam::907859272778:role/bitbucket-deploy-helm-ca-production
+          - step:
+              oidc: true
+              name: US Production
+              deployment: us_production
+              size: 4x
+              runtime:
+                cloud:
+                  atlassian-ip-ranges: true
+              max-time: 15
+              script:
+                - make set-profile set-context upgrade DEPLOYMENT_ENV=us RELEASE_NAME=us-api IMAGE_TAG=$(git log -1 --pretty=%H) AWS_ROLE_ARN=arn:aws:iam::907859272778:role/bitbucket-deploy-helm-us-production
+
+    # Replicate PR pipeline behavior for all branches (except main which has its own pipeline)
+    # This ensures mirrored pushes from GitHub trigger the same tests as PR pipelines
+    "**":
+      - step: *install
+      - parallel:
+        - step: *typecheck
+        - step: *lint
+        - step: *unit-tests
+        - step:
+            <<: *integration-tests-shard
+            name: integration-tests-shard-1
+            script:
+              - TOTAL_SHARDS=4 ./integration-tests/ci-run-shard.sh 1
+        - step:
+            <<: *integration-tests-shard
+            name: integration-tests-shard-2
+            script:
+              - TOTAL_SHARDS=4 ./integration-tests/ci-run-shard.sh 2
+        - step:
+            <<: *integration-tests-shard
+            name: integration-tests-shard-3
+            script:
+              - TOTAL_SHARDS=4 ./integration-tests/ci-run-shard.sh 3
+        - step:
+            <<: *integration-tests-shard
+            name: integration-tests-shard-4
+            script:
+              - TOTAL_SHARDS=4 ./integration-tests/ci-run-shard.sh 4
+
+  pull-requests:
+    "**":
+      - step: *install
+      - parallel:
+        - step: *typecheck
+        - step: *lint
+        - step: *unit-tests
+        - step:
+            <<: *integration-tests-shard
+            name: integration-tests-shard-1
+            script:
+              - TOTAL_SHARDS=4 ./integration-tests/ci-run-shard.sh 1
+        - step:
+            <<: *integration-tests-shard
+            name: integration-tests-shard-2
+            script:
+              - TOTAL_SHARDS=4 ./integration-tests/ci-run-shard.sh 2
+        - step:
+            <<: *integration-tests-shard
+            name: integration-tests-shard-3
+            script:
+              - TOTAL_SHARDS=4 ./integration-tests/ci-run-shard.sh 3
+        - step:
+            <<: *integration-tests-shard
+            name: integration-tests-shard-4
+            script:
+              - TOTAL_SHARDS=4 ./integration-tests/ci-run-shard.sh 4
+
+  custom: # This pipeline is designed to be run on a schedule
+    contract-test:
+      - step:
+          oidc: true
+          name: E2E DB bootstrap
+          deployment: e2e
+          size: 4x
+          max-time: 5
+          runtime:
+            cloud:
+              atlassian-ip-ranges: true
+          script:
+            - make set-profile AWS_ROLE_ARN=arn:aws:iam::664686999905:role/bitbucket-deploy-helm-test
+            - ./api-chart/bootstrap_data/update_db.sh --database us_e2e_db --container api --namespace e2e --application api-chart --user knex --password ${E2E_KNEX_PASSWORD} --host us-test-db.bf-node.com --bootstrap-e2e
+      - step:
+          oidc: true
+          name: Test Contract test
+          image: node:22
+          deployment: contract-test
+          script:
+            - cp .pipeline_templates/config.json.template app/config.json
+            - npm install
+            - npm run test-contract-nightly
+    e2e-bootstrap:
+      - step:
+          oidc: true
+          name: E2E DB bootstrap
+          deployment: e2e
+          size: 4x
+          max-time: 5
+          runtime:
+            cloud:
+              atlassian-ip-ranges: true
+          script:
+            - make set-profile AWS_ROLE_ARN=arn:aws:iam::664686999905:role/bitbucket-deploy-helm-test
+            - ./api-chart/bootstrap_data/update_db.sh --database us_e2e_db --container api --namespace e2e --application api-chart --user knex --password ${E2E_KNEX_PASSWORD} --host us-test-db.bf-node.com --bootstrap-e2e

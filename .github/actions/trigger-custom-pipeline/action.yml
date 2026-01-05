@@ -1,0 +1,39 @@
+name: 'Trigger Bitbucket Custom Pipeline'
+description: 'Triggers a specific Bitbucket custom pipeline (e.g., contract-test, e2e-bootstrap) on a branch'
+
+inputs:
+  bitbucket_api_token:
+    description: 'Bitbucket API token/app password with pipeline trigger permission'
+    required: true
+  bitbucket_repo:
+    description: 'Bitbucket repository in workspace/repo-slug format'
+    required: true
+  pipeline_name:
+    description: 'Custom pipeline name to run (matches bitbucket-pipelines.yml "custom" key)'
+    required: true
+  branch_name:
+    description: 'Branch to target for the pipeline (defaults to main)'
+    required: false
+    default: 'main'
+
+outputs:
+  triggered_pipeline_uuid:
+    description: 'UUID of the triggered Bitbucket pipeline'
+    value: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
+  pipeline_url:
+    description: 'URL to view the Bitbucket pipeline run'
+    value: ${{ steps.trigger.outputs.pipeline_url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Trigger Bitbucket custom pipeline
+      id: trigger
+      shell: bash
+      env:
+        BITBUCKET_API_TOKEN: ${{ inputs.bitbucket_api_token }}
+        BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+        PIPELINE_NAME: ${{ inputs.pipeline_name }}
+        BRANCH_NAME: ${{ inputs.branch_name }}
+      run: node ${{ github.action_path }}/dist/index.js
+
