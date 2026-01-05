@@ -9,16 +9,18 @@ Reusable GitHub Actions and workflows for mirroring repositories to Bitbucket.
 - **Delete branches** on Bitbucket when PRs are closed
 - **Wait for Bitbucket pipelines** to complete and report status
 - **Trigger pipelines** via API when commits already exist
+- **Trigger custom Bitbucket pipelines** (e.g., `contract-test`, `e2e-bootstrap`) on specific branches
 
 ## Reusable Workflows
 
-This repository provides three purpose-specific reusable workflows:
+This repository provides four purpose-specific reusable workflows:
 
 | Workflow | Purpose | When to Use |
 |----------|---------|-------------|
 | `reusable-mirror-branch.yml` | Mirror a branch to Bitbucket | Push events, PR opened/synchronized |
 | `reusable-mirror-tag.yml` | Mirror a tag to Bitbucket | Tag push events (e.g., `v*`) |
 | `reusable-delete-branch.yml` | Delete a branch from Bitbucket | PR closed (merged or not) |
+| `reusable-trigger-custom-pipeline.yml` | Trigger a custom Bitbucket pipeline | Manual triggers, scheduled jobs, or after specific events |
 
 ## Quick Start
 
@@ -199,6 +201,29 @@ Mirrors a tag from GitHub to Bitbucket, optionally waits for pipeline.
 | `pipeline_result` | Final result of the Bitbucket pipeline |
 | `pipeline_url` | URL to view the pipeline in Bitbucket |
 
+### `reusable-trigger-custom-pipeline.yml`
+
+Triggers a specific custom Bitbucket pipeline (e.g., `contract-test`, `e2e-bootstrap`) on a branch. Optionally waits for the pipeline to complete.
+
+**Inputs:**
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `pipeline_name` | Yes | - | Custom pipeline name as defined under `pipelines.custom` in `bitbucket-pipelines.yml` |
+| `branch_name` | No | `main` | Branch to target for the pipeline |
+| `bitbucket_repo` | Yes | - | Bitbucket repository in `workspace/repo-slug` format |
+| `wait_for_pipeline` | No | `true` | If true, poll Bitbucket until the pipeline finishes |
+| `poll_interval` | No | `30` | Seconds between polling attempts when waiting |
+| `max_attempts` | No | `60` | Maximum polling attempts before timing out |
+
+**Outputs:**
+
+| Output | Description |
+|--------|-------------|
+| `pipeline_uuid` | UUID of the triggered pipeline |
+| `pipeline_url` | URL to view the pipeline in Bitbucket |
+| `pipeline_result` | Final pipeline result when `wait_for_pipeline=true` (e.g., `SUCCESSFUL`, `FAILED`) |
+
 ## Actions Reference
 
 ### `mirror-to-bitbucket`
@@ -245,6 +270,23 @@ Polls Bitbucket API to wait for a pipeline to complete.
 - `pipeline_result`: Final result (e.g., `SUCCESSFUL`, `FAILED`)
 - `pipeline_url`: URL to view the pipeline
 - `error_message`: Error details if pipeline failed
+
+### `trigger-custom-pipeline`
+
+Triggers a specific custom Bitbucket pipeline (e.g., `contract-test`, `e2e-bootstrap`) on a branch. This is useful when you need to trigger a custom pipeline that's already defined in `bitbucket-pipelines.yml` under the `pipelines.custom` section.
+
+```yaml
+- uses: haythamlabrini-euna/mirror-workflows/.github/actions/trigger-custom-pipeline@main
+  with:
+    bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+    bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
+    pipeline_name: contract-test       # Name of the custom pipeline
+    branch_name: main                  # Optional, defaults to main
+```
+
+**Outputs:**
+- `triggered_pipeline_uuid`: UUID of the triggered pipeline (without braces)
+- `pipeline_url`: Direct link to the pipeline run in Bitbucket
 
 ## Repository Setup
 
@@ -412,6 +454,65 @@ jobs:
 ```
 
 **Note**: When using composite actions directly, you'll need a separate workflow for `push` events to handle default branch mirroring.
+
+### Example: Trigger Custom Pipeline
+
+Trigger a custom Bitbucket pipeline (e.g., `contract-test` or `e2e-bootstrap`) using the reusable workflow:
+
+```yaml
+# .github/workflows/trigger-pipeline.yml
+name: Trigger Custom Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      pipeline_name:
+        description: 'Pipeline to trigger'
+        required: true
+        type: choice
+        options:
+          - contract-test
+          - e2e-bootstrap
+      branch_name:
+        description: 'Branch to target'
+        required: false
+        default: 'main'
+
+jobs:
+  trigger:
+    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-trigger-custom-pipeline.yml@main
+    with:
+      pipeline_name: ${{ github.event.inputs.pipeline_name }}
+      branch_name: ${{ github.event.inputs.branch_name || 'main' }}
+      bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
+      wait_for_pipeline: true
+    secrets:
+      BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+```
+
+Or use the action directly for more control:
+
+```yaml
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger custom pipeline
+        id: trigger
+        uses: haythamlabrini-euna/mirror-workflows/.github/actions/trigger-custom-pipeline@main
+        with:
+          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+          bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
+          pipeline_name: contract-test
+          branch_name: main
+
+      - name: Wait for pipeline
+        uses: haythamlabrini-euna/mirror-workflows/.github/actions/wait-for-bitbucket-pipeline@main
+        with:
+          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+          bitbucket_repo: ${{ secrets.BITBUCKET_REPO }}
+          expected_pipeline_uuid: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
+```
 
 ## Deprecated Workflow
 
