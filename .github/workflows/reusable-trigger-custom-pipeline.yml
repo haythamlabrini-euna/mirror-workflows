@@ -150,7 +150,8 @@ jobs:
             uuid=$(echo "$response_body" | jq -r '.uuid // empty' | tr -d '{}')
             
             if [ -n "$uuid" ] && [ "$uuid" != "null" ]; then
-              pipeline_url="https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/${uuid}"
+              # Pipeline URL requires curly braces around UUID
+              pipeline_url="https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/{${uuid}}"
               
               echo "✅ Custom pipeline triggered (UUID: $uuid)"
               echo "🔗 Pipeline URL: $pipeline_url"
