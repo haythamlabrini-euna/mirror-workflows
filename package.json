@@ -1,20 +1,6 @@
 {
   "name": "mirror-workflows",
   "version": "1.0.0",
-  "description": "Reusable GitHub Actions and workflows for mirroring repositories to Bitbucket",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build": "node scripts/build-actions.mjs",
-    "build:mirror": "esbuild .github/actions/mirror-to-bitbucket/mirror.ts --bundle --platform=node --target=node20 --outfile=.github/actions/mirror-to-bitbucket/dist/index.js",
-    "build:wait": "esbuild .github/actions/wait-for-bitbucket-pipeline/wait.ts --bundle --platform=node --target=node20 --outfile=.github/actions/wait-for-bitbucket-pipeline/dist/index.js",
-    "build:trigger": "esbuild .github/actions/trigger-custom-pipeline/trigger-custom-pipeline.ts --bundle --platform=node --target=node20 --outfile=.github/actions/trigger-custom-pipeline/dist/index.js",
-    "build:wait-by-uuid": "esbuild .github/actions/wait-for-bitbucket-pipeline-by-uuid/wait-by-uuid.ts --bundle --platform=node --target=node20 --outfile=.github/actions/wait-for-bitbucket-pipeline-by-uuid/dist/index.js"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "esbuild": "^0.20.0",
-    "typescript": "^5.0.0"
-  }
+  "description": "Reusable GitHub Actions workflows for mirroring repositories to Bitbucket",
+  "private": true
 }
-
