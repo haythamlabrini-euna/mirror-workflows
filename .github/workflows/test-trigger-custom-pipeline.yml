@@ -1,6 +1,6 @@
-# Test workflow for the trigger-custom-pipeline action
+# Test workflow for the trigger-custom-pipeline functionality
 #
-# This workflow tests the TypeScript actions in isolation by:
+# This workflow tests the inline bash implementation by:
 # 1. Triggering a custom Bitbucket pipeline
 # 2. Optionally waiting for it to complete
 #
@@ -46,38 +46,122 @@ on:
         default: '10'
 
 jobs:
-  # Test 1: Direct action usage (not through reusable workflow)
-  test-direct-action:
-    name: Test Direct Action Usage
+  # Test 1: Direct inline implementation
+  test-direct:
+    name: Test Direct Implementation
     runs-on: ubuntu-latest
     outputs:
-      pipeline_uuid: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
+      pipeline_uuid: ${{ steps.trigger.outputs.pipeline_uuid }}
       pipeline_url: ${{ steps.trigger.outputs.pipeline_url }}
       pipeline_result: ${{ steps.wait.outputs.pipeline_result }}
     
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Trigger custom pipeline
         id: trigger
-        uses: ./.github/actions/trigger-custom-pipeline
-        with:
-          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
-          bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
-          pipeline_name: ${{ inputs.pipeline_name }}
-          branch_name: ${{ inputs.branch_name }}
+        env:
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          BITBUCKET_REPO: ${{ vars.BITBUCKET_REPO }}
+          PIPELINE_NAME: ${{ inputs.pipeline_name }}
+          BRANCH_NAME: ${{ inputs.branch_name }}
+        run: |
+          set -e
+          
+          # Parse workspace and repo slug
+          IFS='/' read -r workspace repo_slug <<< "$BITBUCKET_REPO"
+          branch_name="${BRANCH_NAME:-main}"
+          
+          echo "Triggering Bitbucket custom pipeline '$PIPELINE_NAME' on branch '$branch_name'"
+          
+          # Build payload
+          payload=$(jq -n \
+            --arg ref_name "$branch_name" \
+            --arg pattern "$PIPELINE_NAME" \
+            '{
+              target: {
+                type: "pipeline_ref_target",
+                ref_type: "branch",
+                ref_name: $ref_name,
+                selector: { type: "custom", pattern: $pattern }
+              }
+            }')
+          
+          # Call Bitbucket API
+          response=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $BITBUCKET_API_TOKEN" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "https://api.bitbucket.org/2.0/repositories/${workspace}/${repo_slug}/pipelines/")
+          
+          http_code=$(echo "$response" | tail -n1)
+          response_body=$(echo "$response" | sed '$d')
+          
+          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            uuid=$(echo "$response_body" | jq -r '.uuid // empty' | tr -d '{}')
+            pipeline_url="https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/${uuid}"
+            
+            echo "✅ Pipeline triggered (UUID: $uuid)"
+            echo "🔗 Pipeline URL: $pipeline_url"
+            
+            echo "pipeline_uuid=$uuid" >> "$GITHUB_OUTPUT"
+            echo "pipeline_url=$pipeline_url" >> "$GITHUB_OUTPUT"
+          else
+            echo "❌ Failed to trigger pipeline (HTTP $http_code)"
+            echo "$response_body" | jq '.' 2>/dev/null || echo "$response_body"
+            exit 1
+          fi
 
       - name: Wait for pipeline (if enabled)
         id: wait
         if: inputs.wait_for_pipeline
-        uses: ./.github/actions/wait-for-bitbucket-pipeline-by-uuid
-        with:
-          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
-          bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
-          pipeline_uuid: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
-          poll_interval: ${{ inputs.poll_interval }}
-          max_attempts: ${{ inputs.max_attempts }}
+        env:
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          BITBUCKET_REPO: ${{ vars.BITBUCKET_REPO }}
+          PIPELINE_UUID: ${{ steps.trigger.outputs.pipeline_uuid }}
+          POLL_INTERVAL: ${{ inputs.poll_interval }}
+          MAX_ATTEMPTS: ${{ inputs.max_attempts }}
+        run: |
+          set -e
+          
+          WORKSPACE=$(echo "$BITBUCKET_REPO" | cut -d'/' -f1)
+          REPO_SLUG=$(echo "$BITBUCKET_REPO" | cut -d'/' -f2)
+          CLEAN_UUID=$(echo "$PIPELINE_UUID" | tr -d '{}')
+          
+          echo "Waiting for pipeline UUID: $CLEAN_UUID"
+          echo "Poll interval: ${POLL_INTERVAL}s, Max attempts: ${MAX_ATTEMPTS}"
+          
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            
+            RESPONSE=$(curl -s \
+              "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_SLUG}/pipelines/{${CLEAN_UUID}}" \
+              -H "Authorization: Bearer ${BITBUCKET_API_TOKEN}" \
+              -H "Accept: application/json")
+            
+            STATE=$(echo "$RESPONSE" | jq -r '.state.name // empty')
+            RESULT=$(echo "$RESPONSE" | jq -r '.state.result.name // empty')
+            
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: State=$STATE, Result=$RESULT"
+            
+            if [ "$STATE" = "COMPLETED" ]; then
+              echo "pipeline_result=$RESULT" >> "$GITHUB_OUTPUT"
+              if [ "$RESULT" = "SUCCESSFUL" ]; then
+                echo "✅ Pipeline completed successfully"
+                exit 0
+              else
+                echo "❌ Pipeline completed with result: $RESULT"
+                exit 1
+              fi
+            fi
+            
+            [ $ATTEMPT -lt $MAX_ATTEMPTS ] && sleep $POLL_INTERVAL
+          done
+          
+          echo "❌ Timed out waiting for pipeline"
+          echo "pipeline_result=TIMEOUT" >> "$GITHUB_OUTPUT"
+          exit 1
 
       - name: Summary
         if: always()
@@ -88,9 +172,8 @@ jobs:
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Pipeline Name | ${{ inputs.pipeline_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | ${{ inputs.branch_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Pipeline UUID | ${{ steps.trigger.outputs.triggered_pipeline_uuid }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pipeline UUID | ${{ steps.trigger.outputs.pipeline_uuid }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Pipeline URL | ${{ steps.trigger.outputs.pipeline_url }} |" >> $GITHUB_STEP_SUMMARY
-          
           if [ "${{ inputs.wait_for_pipeline }}" = "true" ]; then
             echo "| Pipeline Result | ${{ steps.wait.outputs.pipeline_result }} |" >> $GITHUB_STEP_SUMMARY
           else
@@ -114,7 +197,7 @@ jobs:
   # Summary job to compare both test approaches
   compare-results:
     name: Compare Test Results
-    needs: [test-direct-action, test-reusable-workflow]
+    needs: [test-direct, test-reusable-workflow]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -124,10 +207,9 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Test | Pipeline UUID | Result |" >> $GITHUB_STEP_SUMMARY
           echo "|------|---------------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Direct Action | ${{ needs.test-direct-action.outputs.pipeline_uuid }} | ${{ needs.test-direct-action.outputs.pipeline_result || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Direct | ${{ needs.test-direct.outputs.pipeline_uuid }} | ${{ needs.test-direct.outputs.pipeline_result || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Reusable Workflow | ${{ needs.test-reusable-workflow.outputs.pipeline_uuid }} | ${{ needs.test-reusable-workflow.outputs.pipeline_result || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           
           echo ""
-          echo "Direct Action URL: ${{ needs.test-direct-action.outputs.pipeline_url }}"
+          echo "Direct URL: ${{ needs.test-direct.outputs.pipeline_url }}"
           echo "Reusable Workflow URL: ${{ needs.test-reusable-workflow.outputs.pipeline_url }}"
-

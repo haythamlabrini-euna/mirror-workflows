@@ -70,4 +70,3 @@ jobs:
             echo "::error::Bitbucket pipeline failed!"
             exit 1
           fi
-
