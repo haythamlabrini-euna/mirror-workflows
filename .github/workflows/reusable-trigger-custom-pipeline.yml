@@ -191,16 +191,23 @@ jobs:
           POLL_INTERVAL="${POLL_INTERVAL:-120}"
           MAX_ATTEMPTS="${MAX_ATTEMPTS:-15}"
           
-          # Clean UUID (remove curly braces if present)
-          CLEAN_UUID=$(echo "$PIPELINE_UUID" | tr -d '{}')
+          # Ensure UUID has curly braces (Bitbucket API requires them)
+          # Remove any existing braces first, then add them back
+          UUID_WITHOUT_BRACES=$(echo "$PIPELINE_UUID" | tr -d '{}')
           
-          if [ -z "$CLEAN_UUID" ]; then
+          if [ -z "$UUID_WITHOUT_BRACES" ]; then
             echo "❌ No pipeline UUID provided"
             exit 1
           fi
           
-          echo "Waiting for Bitbucket pipeline UUID: $CLEAN_UUID"
-          echo "Pipeline URL: https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/{${CLEAN_UUID}}"
+          # Format UUID with curly braces for API call
+          UUID_WITH_BRACES="{${UUID_WITHOUT_BRACES}}"
+          # URL-encode the curly braces for the API endpoint
+          # { becomes %7B and } becomes %7D
+          ENCODED_UUID=$(echo "$UUID_WITH_BRACES" | sed 's/{/%7B/g' | sed 's/}/%7D/g')
+          
+          echo "Waiting for Bitbucket pipeline UUID: ${UUID_WITHOUT_BRACES}"
+          echo "Pipeline URL: https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/${UUID_WITH_BRACES}"
           echo "Poll interval: ${POLL_INTERVAL}s, Max attempts: ${MAX_ATTEMPTS}"
           
           ATTEMPT=0
@@ -209,10 +216,10 @@ jobs:
             ATTEMPT=$((ATTEMPT + 1))
             
             # Fetch pipeline status by UUID
-            # Bitbucket API format: /repositories/{workspace}/{repo_slug}/pipelines/{uuid}
-            # UUID should be used without curly braces in the URL path
+            # Bitbucket API requires UUID with curly braces, URL-encoded in the path
+            # Format: /repositories/{workspace}/{repo_slug}/pipelines/%7B{uuid}%7D
             RESPONSE=$(curl -s \
-              "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_SLUG}/pipelines/${CLEAN_UUID}" \
+              "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_SLUG}/pipelines/${ENCODED_UUID}" \
               -H "Authorization: Bearer ${BITBUCKET_API_TOKEN}" \
               -H "Accept: application/json")
             
