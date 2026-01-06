@@ -28,6 +28,11 @@ const actions = [
     name: 'trigger-custom-pipeline',
     input: '.github/actions/trigger-custom-pipeline/trigger-custom-pipeline.ts',
     output: '.github/actions/trigger-custom-pipeline/dist/index.js'
+  },
+  {
+    name: 'wait-for-bitbucket-pipeline-by-uuid',
+    input: '.github/actions/wait-for-bitbucket-pipeline-by-uuid/wait-by-uuid.ts',
+    output: '.github/actions/wait-for-bitbucket-pipeline-by-uuid/dist/index.js'
   }
 ];
 

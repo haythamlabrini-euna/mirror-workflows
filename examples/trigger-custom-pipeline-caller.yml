@@ -1,0 +1,73 @@
+# Example: How to call the reusable trigger-custom-pipeline workflow from another repository
+#
+# This example shows how to set up a GitHub workflow that triggers a custom Bitbucket
+# pipeline (e.g., contract-test, e2e-bootstrap) using the mirror-workflows repository.
+#
+# Prerequisites:
+#   1. Set up repository secrets:
+#      - BITBUCKET_API_TOKEN: A Bitbucket app password with pipeline trigger permissions
+#   2. Set up repository variables:
+#      - BITBUCKET_REPO: Your Bitbucket repo in "workspace/repo-slug" format
+#
+# Copy this file to .github/workflows/trigger-custom-pipeline.yml in your repository.
+
+name: Trigger Custom Pipeline
+
+on:
+  # Manual trigger with pipeline selection
+  workflow_dispatch:
+    inputs:
+      pipeline_name:
+        description: 'Custom pipeline to trigger'
+        required: true
+        type: choice
+        options:
+          - contract-test
+          - e2e-bootstrap
+      branch_name:
+        description: 'Branch to target'
+        required: false
+        default: 'main'
+      wait_for_pipeline:
+        description: 'Wait for pipeline to complete?'
+        required: false
+        type: boolean
+        default: true
+
+  # Optional: Trigger on a schedule (e.g., nightly contract tests)
+  # schedule:
+  #   - cron: '0 2 * * *'  # Run at 2 AM UTC daily
+
+jobs:
+  trigger:
+    # Call the reusable workflow from mirror-workflows
+    uses: haythamlabrini-euna/mirror-workflows/.github/workflows/reusable-trigger-custom-pipeline.yml@main
+    with:
+      pipeline_name: ${{ github.event.inputs.pipeline_name || 'contract-test' }}
+      branch_name: ${{ github.event.inputs.branch_name || 'main' }}
+      bitbucket_repo: ${{ vars.BITBUCKET_REPO }}
+      # Convert boolean to string for workflow_call compatibility
+      wait_for_pipeline: ${{ github.event.inputs.wait_for_pipeline == 'true' && 'true' || 'true' }}
+      poll_interval: 120
+      max_attempts: 15
+    secrets:
+      BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+
+  # Optional: Post-trigger job that runs after the pipeline completes
+  notify:
+    needs: trigger
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Report pipeline result
+        run: |
+          echo "Pipeline UUID: ${{ needs.trigger.outputs.pipeline_uuid }}"
+          echo "Pipeline URL: ${{ needs.trigger.outputs.pipeline_url }}"
+          echo "Pipeline Result: ${{ needs.trigger.outputs.pipeline_result }}"
+          
+          # Example: Fail this workflow if the pipeline failed
+          if [ "${{ needs.trigger.outputs.pipeline_result }}" = "FAILED" ]; then
+            echo "::error::Bitbucket pipeline failed!"
+            exit 1
+          fi
+

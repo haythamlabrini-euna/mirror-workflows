@@ -1,5 +1,8 @@
 # Reusable workflow for triggering a Bitbucket custom pipeline (e.g., contract-test, e2e-bootstrap)
 #
+# This workflow uses TypeScript-based GitHub Actions for cleaner, more testable code.
+# It triggers a custom pipeline and optionally waits for it to complete.
+#
 # Usage:
 #   uses: <owner>/mirror-workflows/.github/workflows/reusable-trigger-custom-pipeline.yml@main
 #
@@ -21,6 +24,7 @@
 #         pipeline_name: ${{ github.event.inputs.pipeline_name }}
 #         branch_name: main
 #         bitbucket_repo: "workspace/repo-slug"
+#         wait_for_pipeline: true
 #       secrets:
 #         BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
 
@@ -42,6 +46,11 @@ on:
         description: 'Bitbucket repository in workspace/repo-slug format'
         required: true
         type: string
+      wait_for_pipeline:
+        description: 'Whether to wait for the pipeline to complete (defaults to true)'
+        required: false
+        type: string
+        default: 'true'
       poll_interval:
         description: 'Seconds between pipeline polling attempts (defaults to 120)'
         required: false
@@ -64,7 +73,7 @@ on:
         description: 'URL for the triggered pipeline'
         value: ${{ jobs.trigger.outputs.pipeline_url }}
       pipeline_result:
-        description: 'Final result of the pipeline (SUCCESSFUL, FAILED, etc.)'
+        description: 'Final result of the pipeline (SUCCESSFUL, FAILED, etc.) - only set when wait_for_pipeline is true'
         value: ${{ jobs.trigger.outputs.pipeline_result }}
 
 jobs:
@@ -76,183 +85,67 @@ jobs:
       pipeline_result: ${{ steps.wait.outputs.pipeline_result }}
 
     steps:
+      # Checkout the mirror-workflows repository to access the TypeScript actions.
+      # This is required because we're using local actions from this repo.
+      - name: Checkout mirror-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: haythamlabrini-euna/mirror-workflows
+          ref: main
+          path: .mirror-workflows
+
+      # Step 1: Trigger the custom Bitbucket pipeline using the TypeScript action.
+      # This action handles API calls, error handling, and output formatting.
       - name: Trigger Bitbucket custom pipeline
         id: trigger
-        env:
-          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
-          PIPELINE_NAME: ${{ inputs.pipeline_name }}
-          BRANCH_NAME: ${{ inputs.branch_name }}
-        run: |
-          set -e
-          
-          # Validate required inputs
-          if [ -z "$BITBUCKET_API_TOKEN" ] || [ -z "$BITBUCKET_REPO" ] || [ -z "$PIPELINE_NAME" ]; then
-            echo "❌ Missing required inputs: BITBUCKET_API_TOKEN, BITBUCKET_REPO, or PIPELINE_NAME"
-            exit 1
-          fi
-          
-          # Parse workspace and repo slug from BITBUCKET_REPO
-          IFS='/' read -r workspace repo_slug <<< "$BITBUCKET_REPO"
-          if [ -z "$workspace" ] || [ -z "$repo_slug" ]; then
-            echo "❌ BITBUCKET_REPO must be in the format 'workspace/repo-slug'"
-            exit 1
-          fi
-          
-          # Set default branch if not provided
-          branch_name="${BRANCH_NAME:-main}"
-          
-          echo "Triggering Bitbucket custom pipeline '$PIPELINE_NAME' on branch '$branch_name'"
-          
-          # Build payload for Bitbucket API
-          # Custom selector runs the named pipeline under pipelines.custom
-          payload=$(jq -n \
-            --arg ref_name "$branch_name" \
-            --arg pattern "$PIPELINE_NAME" \
-            '{
-              target: {
-                type: "pipeline_ref_target",
-                ref_type: "branch",
-                ref_name: $ref_name,
-                selector: {
-                  type: "custom",
-                  pattern: $pattern
-                }
-              }
-            }')
-          
-          # Call Bitbucket Pipelines REST API to start the custom pipeline
-          response=$(curl -s -w "\n%{http_code}" \
-            -X POST \
-            -H "Authorization: Bearer $BITBUCKET_API_TOKEN" \
-            -H "Accept: application/json" \
-            -H "Content-Type: application/json" \
-            -d "$payload" \
-            "https://api.bitbucket.org/2.0/repositories/${workspace}/${repo_slug}/pipelines/")
-          
-          # Extract HTTP status code and response body
-          http_code=$(echo "$response" | tail -n1)
-          response_body=$(echo "$response" | sed '$d')
-          
-          # Check if request was successful
-          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
-            # Extract UUID from response (remove curly braces if present)
-            uuid=$(echo "$response_body" | jq -r '.uuid // empty' | tr -d '{}')
-            
-            if [ -n "$uuid" ] && [ "$uuid" != "null" ]; then
-              pipeline_url="https://bitbucket.org/${workspace}/${repo_slug}/addon/pipelines/home#!/results/{${uuid}}"
-              
-              echo "✅ Custom pipeline triggered (UUID: $uuid)"
-              echo "🔗 Pipeline URL: $pipeline_url"
-              
-              # Set GitHub Actions outputs
-              echo "triggered_pipeline_uuid=$uuid" >> "$GITHUB_OUTPUT"
-              echo "pipeline_url=$pipeline_url" >> "$GITHUB_OUTPUT"
-            else
-              echo "❌ Failed to extract pipeline UUID from response"
-              echo "Response: $response_body"
-              exit 1
-            fi
-          else
-            # Surface Bitbucket error details to help with debugging permission or naming issues
-            echo "❌ Failed to trigger Bitbucket custom pipeline (HTTP $http_code)"
-            echo "$response_body" | jq '.' 2>/dev/null || echo "$response_body"
-            exit 1
-          fi
+        uses: ./.mirror-workflows/.github/actions/trigger-custom-pipeline
+        with:
+          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+          bitbucket_repo: ${{ inputs.bitbucket_repo }}
+          pipeline_name: ${{ inputs.pipeline_name }}
+          branch_name: ${{ inputs.branch_name }}
 
+      # Step 2: Wait for the pipeline to complete (if wait_for_pipeline is true).
+      # This action polls the Bitbucket API until the pipeline reaches a terminal state.
       - name: Wait for Bitbucket pipeline
         id: wait
-        env:
-          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
-          PIPELINE_UUID: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
-          POLL_INTERVAL: ${{ inputs.poll_interval }}
-          MAX_ATTEMPTS: ${{ inputs.max_attempts }}
-        run: |
-          set -e
-          
-          WORKSPACE=$(echo "$BITBUCKET_REPO" | cut -d'/' -f1)
-          REPO_SLUG=$(echo "$BITBUCKET_REPO" | cut -d'/' -f2)
-          
-          # Set defaults if not provided
-          POLL_INTERVAL="${POLL_INTERVAL:-120}"
-          MAX_ATTEMPTS="${MAX_ATTEMPTS:-15}"
-          
-          # Clean UUID (remove curly braces if present)
-          CLEAN_UUID=$(echo "$PIPELINE_UUID" | tr -d '{}')
-          
-          if [ -z "$CLEAN_UUID" ]; then
-            echo "❌ No pipeline UUID provided"
-            exit 1
-          fi
-          
-          echo "Waiting for Bitbucket pipeline UUID: $CLEAN_UUID"
-          echo "Pipeline URL: https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/{${CLEAN_UUID}}"
-          echo "Poll interval: ${POLL_INTERVAL}s, Max attempts: ${MAX_ATTEMPTS}"
-          
-          ATTEMPT=0
-          
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            ATTEMPT=$((ATTEMPT + 1))
-            
-            # Fetch pipeline status by UUID
-            RESPONSE=$(curl -s \
-              "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_SLUG}/pipelines/{${CLEAN_UUID}}" \
-              -H "Authorization: Bearer ${BITBUCKET_API_TOKEN}" \
-              -H "Accept: application/json")
-            
-            # Check if request was successful
-            if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
-              echo "⚠️ Attempt $ATTEMPT/$MAX_ATTEMPTS: Pipeline not found yet, waiting..."
-              sleep $POLL_INTERVAL
-              continue
-            fi
-            
-            # Extract pipeline state and result
-            STATE=$(echo "$RESPONSE" | jq -r '.state.name // empty')
-            RESULT=$(echo "$RESPONSE" | jq -r '.state.result.name // empty')
-            
-            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: State=$STATE, Result=$RESULT"
-            
-            # Check if pipeline is complete
-            if [ "$STATE" = "COMPLETED" ]; then
-              echo "pipeline_result=$RESULT" >> "$GITHUB_OUTPUT"
-              
-              if [ "$RESULT" = "SUCCESSFUL" ]; then
-                echo "✅ Pipeline completed successfully"
-                exit 0
-              else
-                echo "❌ Pipeline completed with result: $RESULT"
-                exit 1
-              fi
-            fi
-            
-            # Wait before next poll
-            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-              sleep $POLL_INTERVAL
-            fi
-          done
-          
-          echo "❌ Timed out waiting for Bitbucket pipeline after $MAX_ATTEMPTS attempts"
-          exit 1
+        if: inputs.wait_for_pipeline == 'true'
+        uses: ./.mirror-workflows/.github/actions/wait-for-bitbucket-pipeline-by-uuid
+        with:
+          bitbucket_api_token: ${{ secrets.BITBUCKET_API_TOKEN }}
+          bitbucket_repo: ${{ inputs.bitbucket_repo }}
+          pipeline_uuid: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
+          poll_interval: ${{ inputs.poll_interval }}
+          max_attempts: ${{ inputs.max_attempts }}
 
+      # Step 3: Summarize the pipeline result (runs regardless of success/failure).
+      # Provides a clear summary for debugging and visibility in GitHub Actions logs.
       - name: Summarize pipeline result
         if: always()
         env:
           PIPELINE_URL: ${{ steps.trigger.outputs.pipeline_url }}
           PIPELINE_UUID: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
           PIPELINE_RESULT: ${{ steps.wait.outputs.pipeline_result }}
+          WAIT_FOR_PIPELINE: ${{ inputs.wait_for_pipeline }}
         run: |
           echo "=== Bitbucket Pipeline Summary ==="
+          
           if [ -n "$PIPELINE_URL" ]; then
             echo "Pipeline URL: $PIPELINE_URL"
           else
             echo "Pipeline URL: (not available)"
           fi
+          
           if [ -n "$PIPELINE_UUID" ]; then
             echo "Pipeline UUID: $PIPELINE_UUID"
           fi
-          if [ -n "$PIPELINE_RESULT" ]; then
-            echo "Pipeline Result: $PIPELINE_RESULT"
+          
+          if [ "$WAIT_FOR_PIPELINE" = "true" ]; then
+            if [ -n "$PIPELINE_RESULT" ]; then
+              echo "Pipeline Result: $PIPELINE_RESULT"
+            else
+              echo "Pipeline Result: (waiting was enabled but no result available)"
+            fi
+          else
+            echo "Pipeline Result: (not waiting - wait_for_pipeline=false)"
           fi
-
