@@ -42,6 +42,16 @@ on:
         description: 'Bitbucket repository in workspace/repo-slug format'
         required: true
         type: string
+      poll_interval:
+        description: 'Seconds between pipeline polling attempts (defaults to 120)'
+        required: false
+        type: number
+        default: 120
+      max_attempts:
+        description: 'Maximum polling attempts before timeout (defaults to 15)'
+        required: false
+        type: number
+        default: 15
     secrets:
       BITBUCKET_API_TOKEN:
         description: 'Bitbucket API token/app password with pipeline trigger permission'
@@ -53,6 +63,9 @@ on:
       pipeline_url:
         description: 'URL for the triggered pipeline'
         value: ${{ jobs.trigger.outputs.pipeline_url }}
+      pipeline_result:
+        description: 'Final result of the pipeline (SUCCESSFUL, FAILED, etc.)'
+        value: ${{ jobs.trigger.outputs.pipeline_result }}
 
 jobs:
   trigger:
@@ -60,6 +73,7 @@ jobs:
     outputs:
       pipeline_uuid: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
       pipeline_url: ${{ steps.trigger.outputs.pipeline_url }}
+      pipeline_result: ${{ steps.wait.outputs.pipeline_result }}
 
     steps:
       - name: Trigger Bitbucket custom pipeline
@@ -146,13 +160,90 @@ jobs:
             exit 1
           fi
 
-      - name: Summarize pipeline trigger
+      - name: Wait for Bitbucket pipeline
+        id: wait
+        env:
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          BITBUCKET_REPO: ${{ inputs.bitbucket_repo }}
+          PIPELINE_UUID: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
+          POLL_INTERVAL: ${{ inputs.poll_interval }}
+          MAX_ATTEMPTS: ${{ inputs.max_attempts }}
+        run: |
+          set -e
+          
+          WORKSPACE=$(echo "$BITBUCKET_REPO" | cut -d'/' -f1)
+          REPO_SLUG=$(echo "$BITBUCKET_REPO" | cut -d'/' -f2)
+          
+          # Set defaults if not provided
+          POLL_INTERVAL="${POLL_INTERVAL:-120}"
+          MAX_ATTEMPTS="${MAX_ATTEMPTS:-15}"
+          
+          # Clean UUID (remove curly braces if present)
+          CLEAN_UUID=$(echo "$PIPELINE_UUID" | tr -d '{}')
+          
+          if [ -z "$CLEAN_UUID" ]; then
+            echo "❌ No pipeline UUID provided"
+            exit 1
+          fi
+          
+          echo "Waiting for Bitbucket pipeline UUID: $CLEAN_UUID"
+          echo "Pipeline URL: https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/{${CLEAN_UUID}}"
+          echo "Poll interval: ${POLL_INTERVAL}s, Max attempts: ${MAX_ATTEMPTS}"
+          
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            
+            # Fetch pipeline status by UUID
+            RESPONSE=$(curl -s \
+              "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_SLUG}/pipelines/{${CLEAN_UUID}}" \
+              -H "Authorization: Bearer ${BITBUCKET_API_TOKEN}" \
+              -H "Accept: application/json")
+            
+            # Check if request was successful
+            if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+              echo "⚠️ Attempt $ATTEMPT/$MAX_ATTEMPTS: Pipeline not found yet, waiting..."
+              sleep $POLL_INTERVAL
+              continue
+            fi
+            
+            # Extract pipeline state and result
+            STATE=$(echo "$RESPONSE" | jq -r '.state.name // empty')
+            RESULT=$(echo "$RESPONSE" | jq -r '.state.result.name // empty')
+            
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: State=$STATE, Result=$RESULT"
+            
+            # Check if pipeline is complete
+            if [ "$STATE" = "COMPLETED" ]; then
+              echo "pipeline_result=$RESULT" >> "$GITHUB_OUTPUT"
+              
+              if [ "$RESULT" = "SUCCESSFUL" ]; then
+                echo "✅ Pipeline completed successfully"
+                exit 0
+              else
+                echo "❌ Pipeline completed with result: $RESULT"
+                exit 1
+              fi
+            fi
+            
+            # Wait before next poll
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              sleep $POLL_INTERVAL
+            fi
+          done
+          
+          echo "❌ Timed out waiting for Bitbucket pipeline after $MAX_ATTEMPTS attempts"
+          exit 1
+
+      - name: Summarize pipeline result
         if: always()
         env:
           PIPELINE_URL: ${{ steps.trigger.outputs.pipeline_url }}
           PIPELINE_UUID: ${{ steps.trigger.outputs.triggered_pipeline_uuid }}
+          PIPELINE_RESULT: ${{ steps.wait.outputs.pipeline_result }}
         run: |
-          echo "=== Bitbucket Pipeline Trigger Summary ==="
+          echo "=== Bitbucket Pipeline Summary ==="
           if [ -n "$PIPELINE_URL" ]; then
             echo "Pipeline URL: $PIPELINE_URL"
           else
@@ -160,5 +251,8 @@ jobs:
           fi
           if [ -n "$PIPELINE_UUID" ]; then
             echo "Pipeline UUID: $PIPELINE_UUID"
+          fi
+          if [ -n "$PIPELINE_RESULT" ]; then
+            echo "Pipeline Result: $PIPELINE_RESULT"
           fi
 
