@@ -200,7 +200,7 @@ jobs:
           fi
           
           echo "Waiting for Bitbucket pipeline UUID: $CLEAN_UUID"
-          echo "Pipeline URL: https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/${CLEAN_UUID}"
+          echo "Pipeline URL: https://bitbucket.org/${WORKSPACE}/${REPO_SLUG}/addon/pipelines/home#!/results/{${CLEAN_UUID}}"
           echo "Poll interval: ${POLL_INTERVAL}s, Max attempts: ${MAX_ATTEMPTS}"
           
           ATTEMPT=0
@@ -209,8 +209,10 @@ jobs:
             ATTEMPT=$((ATTEMPT + 1))
             
             # Fetch pipeline status by UUID
+            # Bitbucket API format: /repositories/{workspace}/{repo_slug}/pipelines/{uuid}
+            # UUID should be used without curly braces in the URL path
             RESPONSE=$(curl -s \
-              "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_SLUG}/pipelines/{${CLEAN_UUID}}" \
+              "https://api.bitbucket.org/2.0/repositories/${WORKSPACE}/${REPO_SLUG}/pipelines/${CLEAN_UUID}" \
               -H "Authorization: Bearer ${BITBUCKET_API_TOKEN}" \
               -H "Accept: application/json")
             
